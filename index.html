@@ -145,7 +145,6 @@
         const loader = document.getElementById('loader');
         
         // --- ERROR HANDLING & PRE-CHECK ---
-        // Verify Camera Support before starting Three.js
         if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
             const isFile = window.location.protocol === 'file:';
             const isHttp = window.location.protocol === 'http:' && window.location.hostname !== 'localhost' && window.location.hostname !== '127.0.0.1';
@@ -297,50 +296,71 @@
         scene.add(ringGroup);
 
 
-        // --- Accurate Mapping Logic (MOBILE OPTIMIZED) ---
+        // --- Accurate Mapping Logic (MOBILE & TAB OPTIMIZED) ---
         
-        function getScaleFactors() {
-            // Robust check for dimensions
+        function mapCoord(x, y) {
+            // 1. Get Actual Rendered Video Dimensions
+            // We mimic 'object-fit: cover' logic to know exactly where the video pixels are
             const vw = videoElement.videoWidth || 1280;
             const vh = videoElement.videoHeight || 720;
-            
-            // Prevent divide by zero if video hasn't loaded dimensions yet
-            if (vw === 0 || vh === 0) return { x: 1, y: 1 };
+            // Avoid division by zero
+            if (!vw || !vh) return new THREE.Vector3(0,0,0);
 
             const videoAspect = vw / vh;
-            const screenAspect = window.innerWidth / window.innerHeight;
-            
-            let scaleX = 1, scaleY = 1;
+            const screenW = window.innerWidth;
+            const screenH = window.innerHeight;
+            const screenAspect = screenW / screenH;
+
+            let renderW, renderH;
 
             if (screenAspect > videoAspect) {
-                // Screen is wider than video (Crop Top/Bottom)
-                scaleY = screenAspect / videoAspect;
+                // Screen is wider: Video fills width, crops top/bottom
+                renderW = screenW;
+                renderH = screenW / videoAspect;
             } else {
-                // Screen is taller than video (Crop Left/Right) - Common on Mobile Portrait
-                scaleX = videoAspect / screenAspect;
+                // Screen is taller: Video fills height, crops left/right (Standard Mobile Portrait)
+                renderW = screenH * videoAspect;
+                renderH = screenH;
             }
-            return { x: scaleX, y: scaleY };
-        }
 
-        function mapCoord(x, y) {
-            const scales = getScaleFactors();
-            const screenAspect = window.innerWidth / window.innerHeight;
+            // 2. Convert Normalized (0..1) to Rendered Pixels (Center Relative)
+            // x=0 is left of video, x=1 is right of video
+            const px = (x - 0.5) * renderW;
+            const py = -(y - 0.5) * renderH; // Flip Y for 3D
+
+            // 3. Convert Pixels to 3D World Units
+            // Orthographic Camera: Height is always 2 units (-1 to 1)
+            // Pixel-to-World Ratio = 2 / screenH
+            const ratio = 2 / screenH;
             
-            // Map 0..1 to standard centered coordinates
-            // Adjusted by scaling factors to account for 'object-fit: cover'
-            const nx = (x - 0.5) * 2 * scales.x * screenAspect;
-            const ny = -(y - 0.5) * 2 * scales.y;
-            
-            return new THREE.Vector3(nx, ny, 0);
+            return new THREE.Vector3(px * ratio, py * ratio, 0);
         }
         
         function getZScale() {
-            const scales = getScaleFactors();
-            const screenAspect = window.innerWidth / window.innerHeight;
-            // Dampen the multiplier for Portrait Mode (where screenAspect < 1)
-            // This prevents "deep" occlusion on narrow screens
-            const multiplier = screenAspect < 1 ? 2.0 : 3.0;
-            return multiplier * scales.x * screenAspect; 
+            // Z depth needs to scale with the world size to maintain perspective illusion
+            // On portrait, world width is small, so we don't want excessive Z-depth
+            const screenW = window.innerWidth;
+            const screenH = window.innerHeight;
+            // Ratio of world units per pixel
+            const ratio = 2 / screenH;
+            // A base reference width (e.g. face width in pixels) maps to world units
+            // We essentially want Z units to be somewhat isotropic with X/Y
+            // Return a factor that converts normalized Z (from MP) to World Z
+            // MP Z is roughly comparable to X width.
+            const vw = videoElement.videoWidth || 1280;
+            const vh = videoElement.videoHeight || 720;
+            const videoAspect = vw / vh;
+            
+            // Calculate Render Width in World Units
+            let renderW_World;
+            const screenAspect = screenW / screenH;
+            if (screenAspect > videoAspect) {
+                renderW_World = (screenW) * ratio; // Full width visible
+            } else {
+                renderW_World = (screenH * videoAspect) * ratio; // Cropped width
+            }
+            
+            return renderW_World; 
         }
 
         function getDistanceWorld(p1, p2) {
@@ -370,7 +390,7 @@
         const hands = new Hands({locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${file}`});
         hands.setOptions({ 
             maxNumHands: 1, 
-            modelComplexity: 1, // 1 is good, 0 is faster for old mobiles
+            modelComplexity: 1, 
             minDetectionConfidence: 0.5, 
             minTrackingConfidence: 0.5 
         });
@@ -585,16 +605,19 @@
 
         // --- Camera & Render Loop ---
 
-        const cameraUtils = new Camera(videoElement, {
+        const isMobile = window.innerWidth < window.innerHeight;
+        const cameraConfig = {
             onFrame: async () => {
                 await faceMesh.send({image: videoElement});
                 await hands.send({image: videoElement});
                 renderer.render(scene, camera);
             },
-            width: 1280,
-            height: 720,
-            facingMode: 'user' // Explicitly request front camera
-        });
+            width: isMobile ? 720 : 1280, // Request vertical for mobile
+            height: isMobile ? 1280 : 720,
+            facingMode: 'user'
+        };
+
+        const cameraUtils = new Camera(videoElement, cameraConfig);
 
         cameraUtils.start()
             .then(() => {
