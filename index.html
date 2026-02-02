@@ -19,78 +19,65 @@
             align-items: center;
         }
         
-        /* Elements are positioned absolutely by JS for perfect alignment */
-        #input-video, #output-canvas { 
-            position: absolute;
-            top: 0; left: 0;
-            transform-origin: top left;
-        }
-
+        /* CRITICAL FIX: 
+           We remove object-fit: cover/contain from CSS.
+           We allow JS to explicitly set width/height/top/left.
+           This ensures Video and Canvas are physically identical rectangles.
+        */
         #input-video {
-            transform: scaleX(-1); /* Mirror video */
+            position: absolute;
+            transform: scaleX(-1);
             display: block;
-            /* Default to fill, JS will size the element to match aspect ratio */
-            width: 100%;
-            height: 100%;
-            object-fit: fill; 
+            /* Reset default constraints */
+            max-width: none;
+            max-height: none;
+            width: auto;
+            height: auto;
         }
 
         #output-canvas { 
+            position: absolute;
+            transform: scaleX(-1);
             pointer-events: none;
-            transform: scaleX(-1); /* Mirror 3D context to match */
+            /* Canvas size also managed by JS */
         }
         
         /* UI Overlay */
         #ui-layer {
-            position: absolute; top: 16px; left: 16px; z-index: 10;
-            background: rgba(0, 0, 0, 0.5); backdrop-filter: blur(6px);
-            padding: 10px; border-radius: 10px; border: 1px solid rgba(255,255,255,0.15);
-            color: white; width: 150px; 
+            position: absolute; top: 20px; left: 20px; z-index: 10;
+            background: rgba(0, 0, 0, 0.6); backdrop-filter: blur(8px);
+            padding: 20px; border-radius: 16px; border: 1px solid rgba(255,255,255,0.15);
+            color: white; width: 260px;
             box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.2);
         }
 
         @media (max-width: 600px) {
             #ui-layer {
-                width: auto;
-                left: 16px;
-                right: auto;
-                bottom: 20px;
+                width: calc(100% - 40px);
+                bottom: 30px;
                 top: auto;
+                left: 20px;
             }
         }
 
-        .toggle-item { display: flex; justify-content: space-between; align-items: center; margin-bottom: 5px; }
-        .toggle-label { font-size: 0.7rem; font-weight: 500; color: #d1d5db; }
+        .toggle-item { display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px; }
+        .toggle-label { font-size: 0.95rem; font-weight: 500; color: #e5e7eb; }
         
-        /* Loader & Error Overlay */
         #loader {
-            position: absolute; top: 0; left: 0; width: 100%; height: 100%;
-            background: #000; z-index: 50; display: flex; flex-direction: column;
-            justify-content: center; align-items: center; text-align: center;
+            position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%);
+            color: white; z-index: 20; text-align: center; width: 100%; pointer-events: none;
         }
         .spinner {
             border: 4px solid rgba(255,255,255,0.3); border-radius: 50%; border-top: 4px solid #fbbf24;
-            width: 40px; height: 40px; animation: spin 1s linear infinite; margin-bottom: 16px;
+            width: 40px; height: 40px; animation: spin 1s linear infinite; margin: 0 auto 10px auto;
         }
         @keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
 
-        /* Start Button (Hidden by default) */
-        #start-btn {
-            display: none;
-            margin-top: 20px;
-            padding: 12px 24px;
-            background-color: #fbbf24;
-            color: black;
-            font-weight: bold;
-            border-radius: 8px;
-            cursor: pointer;
-        }
-
         .status-pill {
-            display: inline-block; padding: 2px 6px; border-radius: 8px;
+            display: inline-block; padding: 4px 8px; border-radius: 12px;
             background: rgba(16, 185, 129, 0.2); color: #6ee7b7;
-            font-size: 0.55rem; font-weight: 600; text-transform: uppercase; letter-spacing: 0.05em;
-            margin-bottom: 8px;
+            font-size: 0.7rem; font-weight: 600; text-transform: uppercase; letter-spacing: 0.05em;
+            margin-bottom: 16px;
         }
     </style>
 
@@ -114,39 +101,36 @@
 
     <div id="loader">
         <div class="spinner"></div>
-        <p id="status-text" class="text-gray-300">Requesting Camera Access...</p>
-        <button id="start-btn" onclick="startCameraManual()">Start Camera</button>
-        <div id="error-msg" class="text-red-500 mt-4 px-4 max-w-sm hidden"></div>
+        <p>Aligning Video...</p>
     </div>
 
     <div id="ui-layer">
-        <h1 class="text-xs font-bold mb-1 text-amber-400 tracking-wider">LUXE TRY-ON</h1>
-        <div class="status-pill">Active</div>
+        <h1 class="text-xl font-bold mb-2 text-amber-400 tracking-wider">LUXE TRY-ON</h1>
+        <div class="status-pill">Locked Sync Mode</div>
         
         <div class="toggle-item">
             <span class="toggle-label">Earrings</span>
-            <input type="checkbox" id="toggle-earring" checked class="accent-amber-500 w-3 h-3 cursor-pointer">
+            <input type="checkbox" id="toggle-earring" checked class="accent-amber-500 w-5 h-5 cursor-pointer">
         </div>
 
         <div class="toggle-item">
             <span class="toggle-label">Necklace</span>
-            <input type="checkbox" id="toggle-necklace" checked class="accent-amber-500 w-3 h-3 cursor-pointer">
+            <input type="checkbox" id="toggle-necklace" checked class="accent-amber-500 w-5 h-5 cursor-pointer">
         </div>
 
         <div class="toggle-item">
             <span class="toggle-label">Ring</span>
-            <input type="checkbox" id="toggle-ring" checked class="accent-amber-500 w-3 h-3 cursor-pointer">
+            <input type="checkbox" id="toggle-ring" checked class="accent-amber-500 w-5 h-5 cursor-pointer">
         </div>
         
-        <div class="mt-2 pt-2 border-t border-gray-700 text-[9px] text-gray-500">
+        <div class="mt-4 pt-4 border-t border-gray-700 text-xs text-gray-400">
             <p>1:1 Physical Alignment.</p>
             <p>Fixed for Mobile.</p>
         </div>
     </div>
 
     <div id="canvas-container">
-        <!-- Muted/Autoplay/Playsinline are mandatory for mobile video -->
-        <video id="input-video" playsinline muted autoplay></video>
+        <video id="input-video" playsinline></video>
         <canvas id="output-canvas"></canvas>
     </div>
 
@@ -173,22 +157,20 @@
         const videoElement = document.getElementById('input-video');
         const canvasElement = document.getElementById('output-canvas');
         const loader = document.getElementById('loader');
-        const statusText = document.getElementById('status-text');
-        const startBtn = document.getElementById('start-btn');
-        const errorMsg = document.getElementById('error-msg');
         
-        // --- ERROR HANDLING & INIT ---
-        window.onerror = function(message, source, lineno, colno, error) {
-            statusText.innerText = "Error Detected";
-            errorMsg.innerText = message;
-            errorMsg.classList.remove('hidden');
-        };
-
+        // --- ERROR HANDLING ---
         if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
-            statusText.innerText = "Camera Not Supported";
-            errorMsg.innerHTML = "<b>Use HTTPS</b> or localhost.<br>Standard http:// blocks camera.";
-            errorMsg.classList.remove('hidden');
-            document.querySelector('.spinner').style.display = 'none';
+            const isFile = window.location.protocol === 'file:';
+            let errorMsg = "Camera API is not available.";
+            if (isFile) errorMsg = "<b>Error:</b> File opened locally. Use a local server (localhost).";
+            else errorMsg = "<b>Error:</b> HTTPS required for camera access.";
+
+            loader.style.pointerEvents = "auto"; 
+            loader.innerHTML = `
+                <div class="text-red-400 p-6 bg-gray-900 border border-red-800 rounded-xl max-w-sm mx-auto shadow-2xl">
+                    <h3 class="font-bold text-lg mb-2">⚠️ Camera Blocked</h3>
+                    <p class="text-sm text-gray-300">${errorMsg}</p>
+                </div>`;
             throw new Error("Camera API not found");
         }
 
@@ -285,6 +267,9 @@
 
 
         // --- LOCKED LAYOUT ENGINE (Manual Alignment) ---
+        // We calculate the exact size the video SHOULD be to cover the screen
+        // And then we force BOTH the video and canvas to those exact pixels.
+        // This bypasses browser inconsistencies with 'object-fit'.
         
         function updateLayout() {
             const w = window.innerWidth;
@@ -318,7 +303,6 @@
             videoElement.style.height = `${renderH}px`;
             videoElement.style.left = `${left}px`;
             videoElement.style.top = `${top}px`;
-            videoElement.style.objectFit = 'fill'; // Ensure exact pixel match
             
             // 2. Force Canvas Element Size & Position (Identical to Video)
             canvasElement.style.width = `${renderW}px`;
@@ -526,63 +510,29 @@
             } else ringGroup.visible = false;
         }
 
-        // --- MANUAL CAMERA START (Fix for Black Screen) ---
+        // --- Camera & Resizing ---
 
         const isMobile = window.innerWidth < window.innerHeight;
-        let isCameraRunning = false;
-
-        window.startCameraManual = async function() {
-            statusText.innerText = "Requesting Stream...";
-            
-            const constraints = {
-                video: {
-                    facingMode: 'user',
-                    width: { ideal: isMobile ? 720 : 1280 },
-                    height: { ideal: isMobile ? 1280 : 720 }
-                }
-            };
-
-            try {
-                const stream = await navigator.mediaDevices.getUserMedia(constraints);
-                videoElement.srcObject = stream;
-                statusText.innerText = "Stream Loaded. Playing...";
-                
-                videoElement.onloadedmetadata = () => {
-                    videoElement.play().then(() => {
-                        console.log("Video playing");
-                        startBtn.style.display = 'none';
-                        loader.style.display = 'none';
-                        isCameraRunning = true;
-                        updateLayout();
-                        requestAnimationFrame(processFrame);
-                    }).catch(err => {
-                        console.error("Play failed", err);
-                        statusText.innerText = "Tap button to start";
-                        startBtn.style.display = 'block';
-                    });
-                };
-            } catch (err) {
-                console.error("GUM failed", err);
-                statusText.innerText = "Access Denied / Error";
-                errorMsg.innerText = err.message;
-                errorMsg.classList.remove('hidden');
-            }
-        };
-
-        // Main Loop
-        async function processFrame() {
-            if (!isCameraRunning) return;
-            
-            if (videoElement.readyState >= 2) { // HAVE_CURRENT_DATA
+        const cameraConfig = {
+            onFrame: async () => {
                 await faceMesh.send({image: videoElement});
                 await hands.send({image: videoElement});
                 renderer.render(scene, camera);
-            }
-            requestAnimationFrame(processFrame);
-        }
+            },
+            // [FIX] Request 4:3 (e.g., 640x480 or 480x640) which is standard for webcams/phones
+            // This reduces the cropping significantly compared to requesting 16:9
+            width: { ideal: isMobile ? 480 : 1280 },
+            height: { ideal: isMobile ? 640 : 960 },
+            facingMode: 'user'
+        };
 
-        // Auto-start try
-        startCameraManual();
+        const cameraUtils = new Camera(videoElement, cameraConfig);
+        cameraUtils.start()
+            .then(() => loader.style.display = 'none')
+            .catch(err => {
+                console.error(err);
+                loader.innerHTML = `<p class="text-red-500">Camera initialization failed.</p>`;
+            });
 
 
         // --- UI & Events ---
