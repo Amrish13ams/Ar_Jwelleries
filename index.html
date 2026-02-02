@@ -29,9 +29,10 @@
         #input-video {
             transform: scaleX(-1); /* Mirror video */
             display: block;
+            /* Default to fill, JS will size the element to match aspect ratio */
             width: 100%;
             height: 100%;
-            object-fit: cover; /* Fill the screen */
+            object-fit: fill; 
         }
 
         #output-canvas { 
@@ -39,12 +40,12 @@
             transform: scaleX(-1); /* Mirror 3D context to match */
         }
         
-        /* UI Overlay - Ultra Compact Version */
+        /* UI Overlay */
         #ui-layer {
             position: absolute; top: 16px; left: 16px; z-index: 10;
             background: rgba(0, 0, 0, 0.5); backdrop-filter: blur(6px);
             padding: 10px; border-radius: 10px; border: 1px solid rgba(255,255,255,0.15);
-            color: white; width: 150px; /* Minimized width */
+            color: white; width: 150px; 
             box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.2);
         }
 
@@ -52,7 +53,7 @@
             #ui-layer {
                 width: auto;
                 left: 16px;
-                right: auto; /* Don't stretch */
+                right: auto;
                 bottom: 20px;
                 top: auto;
             }
@@ -61,15 +62,29 @@
         .toggle-item { display: flex; justify-content: space-between; align-items: center; margin-bottom: 5px; }
         .toggle-label { font-size: 0.7rem; font-weight: 500; color: #d1d5db; }
         
+        /* Loader & Error Overlay */
         #loader {
-            position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%);
-            color: white; z-index: 20; text-align: center; width: 100%; pointer-events: none;
+            position: absolute; top: 0; left: 0; width: 100%; height: 100%;
+            background: #000; z-index: 50; display: flex; flex-direction: column;
+            justify-content: center; align-items: center; text-align: center;
         }
         .spinner {
             border: 4px solid rgba(255,255,255,0.3); border-radius: 50%; border-top: 4px solid #fbbf24;
-            width: 40px; height: 40px; animation: spin 1s linear infinite; margin: 0 auto 10px auto;
+            width: 40px; height: 40px; animation: spin 1s linear infinite; margin-bottom: 16px;
         }
         @keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
+
+        /* Start Button (Hidden by default) */
+        #start-btn {
+            display: none;
+            margin-top: 20px;
+            padding: 12px 24px;
+            background-color: #fbbf24;
+            color: black;
+            font-weight: bold;
+            border-radius: 8px;
+            cursor: pointer;
+        }
 
         .status-pill {
             display: inline-block; padding: 2px 6px; border-radius: 8px;
@@ -99,7 +114,9 @@
 
     <div id="loader">
         <div class="spinner"></div>
-        <p>Starting Camera...</p>
+        <p id="status-text" class="text-gray-300">Requesting Camera Access...</p>
+        <button id="start-btn" onclick="startCameraManual()">Start Camera</button>
+        <div id="error-msg" class="text-red-500 mt-4 px-4 max-w-sm hidden"></div>
     </div>
 
     <div id="ui-layer">
@@ -128,7 +145,7 @@
     </div>
 
     <div id="canvas-container">
-        <!-- Added muted and autoplay for mobile support -->
+        <!-- Muted/Autoplay/Playsinline are mandatory for mobile video -->
         <video id="input-video" playsinline muted autoplay></video>
         <canvas id="output-canvas"></canvas>
     </div>
@@ -156,20 +173,22 @@
         const videoElement = document.getElementById('input-video');
         const canvasElement = document.getElementById('output-canvas');
         const loader = document.getElementById('loader');
+        const statusText = document.getElementById('status-text');
+        const startBtn = document.getElementById('start-btn');
+        const errorMsg = document.getElementById('error-msg');
         
-        // --- ERROR HANDLING ---
-        if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
-            const isFile = window.location.protocol === 'file:';
-            let errorMsg = "Camera API is not available.";
-            if (isFile) errorMsg = "<b>Error:</b> File opened locally. Use a local server (localhost).";
-            else errorMsg = "<b>Error:</b> HTTPS required for camera access.";
+        // --- ERROR HANDLING & INIT ---
+        window.onerror = function(message, source, lineno, colno, error) {
+            statusText.innerText = "Error Detected";
+            errorMsg.innerText = message;
+            errorMsg.classList.remove('hidden');
+        };
 
-            loader.style.pointerEvents = "auto"; 
-            loader.innerHTML = `
-                <div class="text-red-400 p-6 bg-gray-900 border border-red-800 rounded-xl max-w-sm mx-auto shadow-2xl">
-                    <h3 class="font-bold text-lg mb-2">⚠️ Camera Blocked</h3>
-                    <p class="text-sm text-gray-300">${errorMsg}</p>
-                </div>`;
+        if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+            statusText.innerText = "Camera Not Supported";
+            errorMsg.innerHTML = "<b>Use HTTPS</b> or localhost.<br>Standard http:// blocks camera.";
+            errorMsg.classList.remove('hidden');
+            document.querySelector('.spinner').style.display = 'none';
             throw new Error("Camera API not found");
         }
 
@@ -299,6 +318,7 @@
             videoElement.style.height = `${renderH}px`;
             videoElement.style.left = `${left}px`;
             videoElement.style.top = `${top}px`;
+            videoElement.style.objectFit = 'fill'; // Ensure exact pixel match
             
             // 2. Force Canvas Element Size & Position (Identical to Video)
             canvasElement.style.width = `${renderW}px`;
@@ -506,28 +526,63 @@
             } else ringGroup.visible = false;
         }
 
-        // --- Camera & Render Loop ---
+        // --- MANUAL CAMERA START (Fix for Black Screen) ---
 
         const isMobile = window.innerWidth < window.innerHeight;
-        const cameraConfig = {
-            onFrame: async () => {
+        let isCameraRunning = false;
+
+        window.startCameraManual = async function() {
+            statusText.innerText = "Requesting Stream...";
+            
+            const constraints = {
+                video: {
+                    facingMode: 'user',
+                    width: { ideal: isMobile ? 720 : 1280 },
+                    height: { ideal: isMobile ? 1280 : 720 }
+                }
+            };
+
+            try {
+                const stream = await navigator.mediaDevices.getUserMedia(constraints);
+                videoElement.srcObject = stream;
+                statusText.innerText = "Stream Loaded. Playing...";
+                
+                videoElement.onloadedmetadata = () => {
+                    videoElement.play().then(() => {
+                        console.log("Video playing");
+                        startBtn.style.display = 'none';
+                        loader.style.display = 'none';
+                        isCameraRunning = true;
+                        updateLayout();
+                        requestAnimationFrame(processFrame);
+                    }).catch(err => {
+                        console.error("Play failed", err);
+                        statusText.innerText = "Tap button to start";
+                        startBtn.style.display = 'block';
+                    });
+                };
+            } catch (err) {
+                console.error("GUM failed", err);
+                statusText.innerText = "Access Denied / Error";
+                errorMsg.innerText = err.message;
+                errorMsg.classList.remove('hidden');
+            }
+        };
+
+        // Main Loop
+        async function processFrame() {
+            if (!isCameraRunning) return;
+            
+            if (videoElement.readyState >= 2) { // HAVE_CURRENT_DATA
                 await faceMesh.send({image: videoElement});
                 await hands.send({image: videoElement});
                 renderer.render(scene, camera);
-            },
-            // [FIX] Camera resolution Request
-            width: isMobile ? { ideal: 720 } : { ideal: 1280 },
-            height: isMobile ? { ideal: 1280 } : { ideal: 720 },
-            facingMode: 'user'
-        };
+            }
+            requestAnimationFrame(processFrame);
+        }
 
-        const cameraUtils = new Camera(videoElement, cameraConfig);
-        cameraUtils.start()
-            .then(() => loader.style.display = 'none')
-            .catch(err => {
-                console.error(err);
-                loader.innerHTML = `<p class="text-red-500">Camera initialization failed.</p>`;
-            });
+        // Auto-start try
+        startCameraManual();
 
 
         // --- UI & Events ---
