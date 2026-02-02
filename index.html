@@ -172,7 +172,7 @@
         // --- Three.js Setup ---
         const scene = new THREE.Scene();
         
-        // [FIX] Initial Aspect Ratio
+        // Initial Aspect Ratio
         const aspect = window.innerWidth / window.innerHeight;
         const camera = new THREE.OrthographicCamera(-aspect, aspect, 1, -1, 0.1, 1000);
         camera.position.z = 10;
@@ -300,12 +300,14 @@
         // --- Accurate Mapping Logic (MOBILE OPTIMIZED) ---
         
         function getScaleFactors() {
-            // [FIX] Use actual video dimensions instead of hardcoded 1280/720
-            // This detects if camera is in portrait mode (e.g. 720x1280)
+            // Robust check for dimensions
             const vw = videoElement.videoWidth || 1280;
             const vh = videoElement.videoHeight || 720;
-            const videoAspect = vw / vh;
             
+            // Prevent divide by zero if video hasn't loaded dimensions yet
+            if (vw === 0 || vh === 0) return { x: 1, y: 1 };
+
+            const videoAspect = vw / vh;
             const screenAspect = window.innerWidth / window.innerHeight;
             
             let scaleX = 1, scaleY = 1;
@@ -335,7 +337,10 @@
         function getZScale() {
             const scales = getScaleFactors();
             const screenAspect = window.innerWidth / window.innerHeight;
-            return 3.0 * scales.x * screenAspect; 
+            // Dampen the multiplier for Portrait Mode (where screenAspect < 1)
+            // This prevents "deep" occlusion on narrow screens
+            const multiplier = screenAspect < 1 ? 2.0 : 3.0;
+            return multiplier * scales.x * screenAspect; 
         }
 
         function getDistanceWorld(p1, p2) {
@@ -608,7 +613,8 @@
         document.getElementById('toggle-necklace').addEventListener('change', (e) => config.necklace = e.target.checked);
         document.getElementById('toggle-ring').addEventListener('change', (e) => config.ring = e.target.checked);
         
-        window.addEventListener('resize', () => {
+        // Handle Resize & Orientation
+        function onWindowResize() {
             const newAspect = window.innerWidth / window.innerHeight;
             camera.left = -newAspect;
             camera.right = newAspect;
@@ -616,11 +622,17 @@
             camera.bottom = -1;
             camera.updateProjectionMatrix();
             renderer.setSize(window.innerWidth, window.innerHeight);
+        }
+
+        window.addEventListener('resize', onWindowResize);
+        window.addEventListener('orientationchange', () => {
+            // Delay slightly to let browser update layout
+            setTimeout(onWindowResize, 100);
         });
         
         // Listen for video data to update aspect ratio logic immediately
         videoElement.addEventListener('loadeddata', () => {
-            window.dispatchEvent(new Event('resize'));
+            onWindowResize(); // Force update once video dimensions are known
         });
 
     </script>
