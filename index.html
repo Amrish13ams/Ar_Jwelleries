@@ -8,30 +8,30 @@
     <style>
         body { margin: 0; overflow: hidden; background-color: #000; font-family: sans-serif; }
         
-        /* Main Container: Flex center to handle 'contain' layout */
         #canvas-container { 
             position: relative; 
             width: 100vw; 
             height: 100vh; 
-            display: flex;
-            justify-content: center;
-            align-items: center;
             overflow: hidden;
         }
         
-        /* Video: Contain ensures NO ZOOM (shows full sensor) */
+        /* Video: Cover fills the screen (Zoomed) */
         #input-video { 
             position: absolute;
-            max-width: 100%; 
-            max-height: 100%; 
-            object-fit: contain; 
-            transform: scaleX(-1); 
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%) scaleX(-1);
+            width: 100%; 
+            height: 100%; 
+            object-fit: cover; 
             opacity: 1; 
         }
         
-        /* Canvas: Absolute on top, sized via JS to match video exactly */
+        /* Canvas: Absolute on top, sized via JS */
         #output-canvas { 
             position: absolute;
+            top: 0; left: 0;
+            width: 100%; height: 100%;
             transform: scaleX(-1); 
             pointer-events: none; 
         }
@@ -98,12 +98,12 @@
 
     <div id="loader">
         <div class="spinner"></div>
-        <p>Calibrating Camera...</p>
+        <p>Calibrating High-Perf...</p>
     </div>
 
     <div id="ui-layer">
         <h1 class="text-xl font-bold mb-2 text-amber-400 tracking-wider">LUXE TRY-ON</h1>
-        <div class="status-pill">True View Mode</div>
+        <div class="status-pill">Immersive View</div>
         
         <div class="toggle-item">
             <span class="toggle-label">Earrings</span>
@@ -121,8 +121,8 @@
         </div>
         
         <div class="mt-4 pt-4 border-t border-gray-700 text-xs text-gray-400">
-            <p>Full field of view active.</p>
-            <p>No cropping or zooming.</p>
+            <p>Optimized for Mobile.</p>
+            <p>Full screen precision.</p>
         </div>
     </div>
 
@@ -141,8 +141,8 @@
             ring: true
         };
         
-        // Smoothing Factor (Adjusted for responsiveness)
-        const SMOOTHING = 0.6;
+        // Smoothing Factor (Slightly increased for smoother feel)
+        const SMOOTHING = 0.5;
 
         let currentEyeDist = 0; 
         
@@ -176,12 +176,13 @@
         // --- Three.js Setup ---
         const scene = new THREE.Scene();
         
-        // Setup initial camera - will be updated in resize
+        const aspect = window.innerWidth / window.innerHeight;
         const camera = new THREE.OrthographicCamera(-1, 1, 1, -1, 0.1, 1000);
         camera.position.z = 10;
 
         const renderer = new THREE.WebGLRenderer({ canvas: canvasElement, alpha: true, antialias: true });
-        renderer.setPixelRatio(window.devicePixelRatio);
+        // PERFORMANCE FIX: Cap pixel ratio to 2 to avoid lag on high-res mobiles
+        renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
         renderer.sortObjects = true;
 
         // Lighting
@@ -266,26 +267,61 @@
         scene.add(ringGroup);
 
 
-        // --- SIMPLIFIED MAPPING LOGIC (No Zoom) ---
-        // Coordinates map directly to the rendered video size, which is centered in the window.
+        // --- ROBUST COVER MAPPING LOGIC (Zoom & Crop Aware) ---
         
         function mapCoord(x, y) {
-            // Get the computed aspect ratio of the 3D space (which matches video exactly)
-            // Camera Height is fixed at 2 units (-1 to 1).
-            // Camera Width is (2 * aspect).
-            const aspect = camera.right; // stored right bound is aspect ratio
+            const vw = videoElement.videoWidth || 1280;
+            const vh = videoElement.videoHeight || 720;
+            if (!vw || !vh) return new THREE.Vector3(0,0,0);
+
+            const videoAspect = vw / vh;
+            const screenW = window.innerWidth;
+            const screenH = window.innerHeight;
+            const screenAspect = screenW / screenH;
+
+            // Calculate the dimensions of the video AS RENDERED on screen (Object-Fit: Cover)
+            let renderW, renderH;
+            let offsetX = 0, offsetY = 0;
+
+            if (screenAspect > videoAspect) {
+                // Screen is Wider: Video fits width, gets cropped vertically (Top/Bottom hidden)
+                renderW = screenW;
+                renderH = screenW / videoAspect;
+                offsetY = (renderH - screenH) / 2;
+            } else {
+                // Screen is Taller: Video fits height, gets cropped horizontally (Left/Right hidden)
+                renderW = screenH * videoAspect;
+                renderH = screenH;
+                offsetX = (renderW - screenW) / 2;
+            }
+
+            // Convert Normalized (0..1) to Rendered Pixels
+            // (0,0) is top-left of the original video
+            let px = x * renderW;
+            let py = y * renderH;
+
+            // Shift coordinates to account for the cropped area (centering)
+            px -= offsetX;
+            py -= offsetY;
+
+            // Convert to 3D World (Center is 0,0)
+            // Screen Width in World Units = (camera.right - camera.left) = 2 * aspect
+            // Screen Height in World Units = (camera.top - camera.bottom) = 2
             
-            // X: 0..1 -> -aspect..+aspect
-            const nx = (x - 0.5) * 2 * aspect;
-            // Y: 0..1 -> 1..-1 (Flipped)
-            const ny = -(y - 0.5) * 2;
-            
+            const worldH = 2; // Ortho height constant
+            const worldW = worldH * (screenW / screenH); // Match screen aspect
+
+            // Map [0..screenW] to [-worldW/2 .. +worldW/2]
+            const nx = (px / screenW) * worldW - (worldW / 2);
+            // Map [0..screenH] to [worldH/2 .. -worldH/2] (Flip Y)
+            const ny = (worldH / 2) - (py / screenH) * worldH;
+
             return new THREE.Vector3(nx, ny, 0);
         }
         
         function getZScale() {
-            // Roughly scale Z depth to match X scale for natural occlusion
-            return camera.right * 2.5; 
+            // Scale Z depth based on face width in world units roughly
+            return 2.5; 
         }
 
         function getDistanceWorld(p1, p2) {
@@ -304,11 +340,21 @@
         
         // --- MediaPipe Setup ---
         const faceMesh = new FaceMesh({locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/face_mesh/${file}`});
-        faceMesh.setOptions({ maxNumFaces: 1, refineLandmarks: true, minDetectionConfidence: 0.5, minTrackingConfidence: 0.5 });
+        faceMesh.setOptions({ 
+            maxNumFaces: 1, 
+            refineLandmarks: false, // PERFORMANCE: Disable iris tracking for speed
+            minDetectionConfidence: 0.5, 
+            minTrackingConfidence: 0.5 
+        });
         faceMesh.onResults(onFaceResults);
 
         const hands = new Hands({locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${file}`});
-        hands.setOptions({ maxNumHands: 1, modelComplexity: 1, minDetectionConfidence: 0.5, minTrackingConfidence: 0.5 });
+        hands.setOptions({ 
+            maxNumHands: 1, 
+            modelComplexity: 0, // PERFORMANCE: Use Lite model
+            minDetectionConfidence: 0.5, 
+            minTrackingConfidence: 0.5 
+        });
         hands.onResults(onHandResults);
 
 
@@ -327,7 +373,6 @@
             const landmarks = results.multiFaceLandmarks[0];
             const zScale = getZScale();
 
-            // Head Turn Logic
             const noseTip = landmarks[1];
             const dLeft = Math.abs(noseTip.x - landmarks[234].x);
             const dRight = Math.abs(noseTip.x - landmarks[454].x);
@@ -354,7 +399,7 @@
             currentEyeDist = eyeDistWorld; 
             const faceHeightWorld = getDistanceWorld(landmarks[10], landmarks[152]);
             
-            // --- Earrings (Using Lobe Tips 132/361) ---
+            // --- Earrings ---
             if (config.earring) {
                 const targetScale = eyeDistWorld * 5.0;
                 const leftLobe = landmarks[132]; 
@@ -364,7 +409,6 @@
                     leftEarringGroup.visible = true;
                     const posL = mapCoord(leftLobe.x, leftLobe.y);
                     posL.z = (-leftLobe.z * zScale); 
-                    // No offset needed for Lobe Tip
                     smoothTransform(leftEarringGroup, posL, 0, targetScale, SMOOTHING);
                 } else leftEarringGroup.visible = false;
 
@@ -379,13 +423,12 @@
                 rightEarringGroup.visible = false;
             }
 
-            // --- Necklace (Anchor to Nose Bridge 168) ---
+            // --- Necklace ---
             if (config.necklace) {
                 necklaceGroup.visible = true;
                 const anchor = landmarks[168]; 
                 const pos = mapCoord(anchor.x, anchor.y);
                 
-                // Drop down by approx 90% of Face Height to reach clavicle
                 const neckDrop = faceHeightWorld * 0.9; 
                 pos.y -= neckDrop;
                 
@@ -397,7 +440,7 @@
                 const leftEye = landmarks[33];
                 const rightEye = landmarks[263];
                 let headRoll = -Math.atan2(rightEye.y - leftEye.y, rightEye.x - leftEye.x); 
-                const shoulderStableRot = headRoll * 0.05; // Almost stationary
+                const shoulderStableRot = headRoll * 0.05; 
 
                 smoothTransform(necklaceGroup, pos, shoulderStableRot, targetScale, SMOOTHING);
             } else {
@@ -439,45 +482,18 @@
 
         // --- Camera & Resizing ---
 
-        // NEW: Critical Resize Logic for 'contain' fit
         function handleResize() {
             const w = window.innerWidth;
             const h = window.innerHeight;
             
-            // Get actual aspect ratio of the stream (or default)
-            const vw = videoElement.videoWidth || 1280;
-            const vh = videoElement.videoHeight || 720;
-            const videoAspect = vw / vh;
-            const windowAspect = w / h;
-            
-            // Calculate the actual size the video is taking up on screen (rendered dims)
-            let renderW, renderH;
-            if (windowAspect > videoAspect) {
-                // Window is wider, video hits height first (pillarbox)
-                renderH = h;
-                renderW = h * videoAspect;
-            } else {
-                // Window is taller, video hits width first (letterbox)
-                renderW = w;
-                renderH = w / videoAspect;
-            }
-            
-            // Resize canvas to match the rendered video exactly
-            renderer.setSize(renderW, renderH);
-            
-            // Update Camera Frustum
-            // Aspect of the Ortho camera must match the RENDERED aspect (renderW / renderH)
-            // which is equal to videoAspect.
-            // Width is (videoAspect * 2), Height is 2.
-            camera.left = -videoAspect;
-            camera.right = videoAspect;
+            const newAspect = w / h;
+            camera.left = -newAspect;
+            camera.right = newAspect;
             camera.top = 1;
             camera.bottom = -1;
             camera.updateProjectionMatrix();
             
-            // Center the canvas in the window (handled by flexbox container, but ensure style is clear)
-            canvasElement.style.width = `${renderW}px`;
-            canvasElement.style.height = `${renderH}px`;
+            renderer.setSize(w, h);
         }
 
         const isMobile = window.innerWidth < window.innerHeight;
@@ -495,14 +511,12 @@
         const cameraUtils = new Camera(videoElement, cameraConfig);
         cameraUtils.start().then(() => loader.style.display = 'none');
 
-        // Events
         document.getElementById('toggle-earring').addEventListener('change', (e) => config.earring = e.target.checked);
         document.getElementById('toggle-necklace').addEventListener('change', (e) => config.necklace = e.target.checked);
         document.getElementById('toggle-ring').addEventListener('change', (e) => config.ring = e.target.checked);
         
         window.addEventListener('resize', handleResize);
         videoElement.addEventListener('loadeddata', handleResize);
-        // Force initial sizing
         setTimeout(handleResize, 500);
 
     </script>
