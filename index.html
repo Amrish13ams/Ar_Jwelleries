@@ -1,0 +1,559 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Virtual Jewelry Try-On</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        body { margin: 0; overflow: hidden; background-color: #1a1a1a; font-family: sans-serif; }
+        #canvas-container { position: relative; width: 100vw; height: 100vh; }
+        
+        /* Mirror the video to make it feel natural */
+        #input-video { 
+            position: absolute; top: 0; left: 0; width: 100%; height: 100%; 
+            object-fit: cover; transform: scaleX(-1); opacity: 1; 
+        }
+        
+        /* The 3D canvas sits on top */
+        #output-canvas { position: absolute; top: 0; left: 0; width: 100%; height: 100%; transform: scaleX(-1); pointer-events: none; }
+        
+        /* UI Overlay */
+        #ui-layer {
+            position: absolute; top: 20px; left: 20px; z-index: 10;
+            background: rgba(0, 0, 0, 0.7); backdrop-filter: blur(8px);
+            padding: 24px; border-radius: 16px; border: 1px solid rgba(255,255,255,0.1);
+            color: white; width: 260px;
+            box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -1px rgba(0, 0, 0, 0.06);
+        }
+
+        .toggle-item {
+            display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px;
+        }
+        .toggle-label { font-size: 0.95rem; font-weight: 500; color: #e5e7eb; }
+        
+        /* Loading Spinner */
+        #loader {
+            position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%);
+            color: white; z-index: 20; text-align: center;
+        }
+        .spinner {
+            border: 4px solid rgba(255,255,255,0.3); border-radius: 50%; border-top: 4px solid #fbbf24;
+            width: 40px; height: 40px; animation: spin 1s linear infinite; margin: 0 auto 10px auto;
+        }
+        @keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
+
+        /* Status Pill */
+        .status-pill {
+            display: inline-block; padding: 4px 8px; border-radius: 12px;
+            background: rgba(251, 191, 36, 0.2); color: #fbbf24;
+            font-size: 0.7rem; font-weight: 600; text-transform: uppercase; letter-spacing: 0.05em;
+            margin-bottom: 16px;
+        }
+    </style>
+
+    <!-- Import Three.js and MediaPipe -->
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js" crossorigin="anonymous"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/control_utils/control_utils.js" crossorigin="anonymous"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/drawing_utils/drawing_utils.js" crossorigin="anonymous"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/face_mesh/face_mesh.js" crossorigin="anonymous"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands/hands.js" crossorigin="anonymous"></script>
+    
+    <!-- Three.js as an ES module import map -->
+    <script type="importmap">
+        {
+            "imports": {
+                "three": "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js",
+                "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/"
+            }
+        }
+    </script>
+</head>
+<body>
+
+    <div id="loader">
+        <div class="spinner"></div>
+        <p>Initializing...</p>
+    </div>
+
+    <div id="ui-layer">
+        <h1 class="text-xl font-bold mb-2 text-amber-400 tracking-wider">LUXE TRY-ON</h1>
+        <div class="status-pill">Precision Fit Mode</div>
+        
+        <!-- Controls -->
+        <div class="toggle-item">
+            <span class="toggle-label">Earrings</span>
+            <input type="checkbox" id="toggle-earring" checked class="accent-amber-500 w-5 h-5 cursor-pointer">
+        </div>
+
+        <div class="toggle-item">
+            <span class="toggle-label">Necklace</span>
+            <input type="checkbox" id="toggle-necklace" checked class="accent-amber-500 w-5 h-5 cursor-pointer">
+        </div>
+
+        <div class="toggle-item">
+            <span class="toggle-label">Ring</span>
+            <input type="checkbox" id="toggle-ring" checked class="accent-amber-500 w-5 h-5 cursor-pointer">
+        </div>
+        
+        <div class="mt-4 pt-4 border-t border-gray-700 text-xs text-gray-400">
+            <p>Smart positioning active.</p>
+            <p>Tight anatomical fit.</p>
+        </div>
+    </div>
+
+    <div id="canvas-container">
+        <video id="input-video" playsinline></video>
+        <canvas id="output-canvas"></canvas>
+    </div>
+
+    <script type="module">
+        import * as THREE from 'three';
+
+        // --- Configuration ---
+        const config = {
+            earring: true,
+            necklace: true,
+            ring: true
+        };
+        
+        // Smoothing Factor
+        const SMOOTHING = 0.5;
+
+        // Shared State for Depth estimation
+        let currentEyeDist = 0; 
+        
+        // Face Silhouette Indices (MediaPipe)
+        const FACE_OVAL_INDICES = [
+            10, 338, 297, 332, 284, 251, 389, 356, 454, 323, 361, 288, 397, 365, 379, 378, 400, 377, 152, 
+            148, 176, 149, 150, 136, 172, 58, 132, 93, 234, 127, 162, 21, 54, 103, 67, 109
+        ];
+
+        // DOM Elements
+        const videoElement = document.getElementById('input-video');
+        const canvasElement = document.getElementById('output-canvas');
+        const loader = document.getElementById('loader');
+        
+        // --- Three.js Setup ---
+        const scene = new THREE.Scene();
+        
+        const aspect = window.innerWidth / window.innerHeight;
+        const camera = new THREE.OrthographicCamera(-aspect, aspect, 1, -1, 0.1, 1000);
+        camera.position.z = 10;
+
+        const renderer = new THREE.WebGLRenderer({ canvas: canvasElement, alpha: true, antialias: true });
+        renderer.setSize(window.innerWidth, window.innerHeight);
+        renderer.setPixelRatio(window.devicePixelRatio);
+        renderer.sortObjects = true;
+
+        // Lighting
+        const ambientLight = new THREE.AmbientLight(0xffffff, 0.6);
+        scene.add(ambientLight);
+        const dirLight = new THREE.DirectionalLight(0xfffcdd, 1.2);
+        dirLight.position.set(5, 10, 7);
+        scene.add(dirLight);
+        const spotLight = new THREE.SpotLight(0xffa95c, 2);
+        spotLight.position.set(-5, 0, 5);
+        scene.add(spotLight);
+
+        // Materials
+        const goldMaterial = new THREE.MeshStandardMaterial({
+            color: 0xffd700,
+            metalness: 0.9,
+            roughness: 0.2,
+            emissive: 0x442200,
+            emissiveIntensity: 0.1
+        });
+
+        const gemMaterial = new THREE.MeshPhysicalMaterial({
+            color: 0xaa0000,
+            metalness: 0.1,
+            roughness: 0.05,
+            transmission: 0.6,
+            thickness: 1.0
+        });
+        
+        const maskMaterial = new THREE.MeshBasicMaterial({ 
+            color: 0x000000, 
+            colorWrite: false 
+        });
+
+        // --- Models ---
+        
+        // 0. Face Occluder
+        const maskGeometry = new THREE.BufferGeometry();
+        const maskVertices = new Float32Array((FACE_OVAL_INDICES.length + 1) * 3);
+        maskGeometry.setAttribute('position', new THREE.BufferAttribute(maskVertices, 3));
+        
+        const maskIndices = [];
+        const centerIdx = 0;
+        const totalPoints = FACE_OVAL_INDICES.length;
+        for (let i = 0; i < totalPoints; i++) {
+            const current = i + 1;
+            const next = (i + 1) % totalPoints + 1;
+            maskIndices.push(centerIdx, current, next);
+        }
+        maskGeometry.setIndex(maskIndices);
+        
+        const faceMask = new THREE.Mesh(maskGeometry, maskMaterial);
+        faceMask.renderOrder = -1;
+        faceMask.matrixAutoUpdate = false; 
+        scene.add(faceMask);
+
+
+        // 1. Earring Group (Left) - Modern Linear Drop Design
+        const leftEarringGroup = new THREE.Group();
+        
+        // Part A: Diamond Stud (Sits on Lobe)
+        const stud = new THREE.Mesh(new THREE.OctahedronGeometry(0.015), gemMaterial);
+        
+        // Part B: Vertical Gold Bar
+        const barHeight = 0.05;
+        const bar = new THREE.Mesh(new THREE.CylinderGeometry(0.002, 0.002, barHeight, 8), goldMaterial);
+        bar.position.y = -(barHeight / 2) - 0.005; // Hangs below stud
+        
+        // Part C: Gold Sphere Drop
+        const dropRadius = 0.015;
+        const bigDrop = new THREE.Mesh(new THREE.SphereGeometry(dropRadius, 32, 32), goldMaterial);
+        bigDrop.position.y = -(barHeight) - 0.01; // At bottom of bar
+        
+        leftEarringGroup.add(stud, bar, bigDrop);
+        leftEarringGroup.visible = false;
+        scene.add(leftEarringGroup);
+
+        // 1b. Earring Group (Right) - Clone
+        const rightEarringGroup = leftEarringGroup.clone();
+        scene.add(rightEarringGroup);
+
+        // 2. Necklace Group
+        const necklaceGroup = new THREE.Group();
+        const chainGeo = new THREE.TorusGeometry(0.18, 0.006, 16, 60, Math.PI); 
+        const chain = new THREE.Mesh(chainGeo, goldMaterial);
+        chain.rotation.z = Math.PI; 
+        const pendantGeo = new THREE.OctahedronGeometry(0.035);
+        const pendant = new THREE.Mesh(pendantGeo, gemMaterial);
+        pendant.position.y = -0.18;
+        necklaceGroup.add(chain, pendant);
+        necklaceGroup.visible = false;
+        scene.add(necklaceGroup);
+
+        // 3. Ring Group (Solitaire Design)
+        const ringGroup = new THREE.Group();
+        const ringMeshContainer = new THREE.Group(); 
+        const band = new THREE.Mesh(new THREE.TorusGeometry(0.035, 0.005, 16, 50), goldMaterial);
+        band.rotation.x = Math.PI / 2;
+        const mount = new THREE.Mesh(new THREE.CylinderGeometry(0.012, 0.005, 0.01, 8), goldMaterial);
+        mount.position.z = 0.039; 
+        mount.rotation.x = Math.PI / 2;
+        const stoneGeo = new THREE.OctahedronGeometry(0.018);
+        const stone = new THREE.Mesh(stoneGeo, gemMaterial);
+        stone.position.z = 0.046; 
+        stone.rotation.x = Math.PI / 4; 
+        stone.rotation.z = Math.PI / 4;
+        ringMeshContainer.add(band, mount, stone);
+        const fingerMask = new THREE.Mesh(
+            new THREE.CylinderGeometry(0.032, 0.032, 0.2, 32), 
+            maskMaterial
+        );
+        ringGroup.add(fingerMask);
+        ringGroup.add(ringMeshContainer);
+        ringGroup.visible = false;
+        scene.add(ringGroup);
+
+
+        // --- Accurate Mapping Logic ---
+        function getScaleFactors() {
+            const videoAspect = 1280 / 720;
+            const screenAspect = window.innerWidth / window.innerHeight;
+            let scaleX = 1, scaleY = 1;
+
+            if (screenAspect > videoAspect) {
+                scaleY = screenAspect / videoAspect;
+            } else {
+                scaleX = videoAspect / screenAspect;
+            }
+            return { x: scaleX, y: scaleY };
+        }
+
+        function mapCoord(x, y) {
+            const scales = getScaleFactors();
+            const screenAspect = window.innerWidth / window.innerHeight;
+            
+            const nx = (x - 0.5) * 2 * scales.x * screenAspect;
+            const ny = -(y - 0.5) * 2 * scales.y;
+            
+            return new THREE.Vector3(nx, ny, 0);
+        }
+        
+        function getZScale() {
+            const scales = getScaleFactors();
+            const screenAspect = window.innerWidth / window.innerHeight;
+            return 3.0 * scales.x * screenAspect; 
+        }
+
+        function getDistanceWorld(p1, p2) {
+             const v1 = mapCoord(p1.x, p1.y);
+             const v2 = mapCoord(p2.x, p2.y);
+             return v1.distanceTo(v2);
+        }
+
+        function smoothTransform(object, targetPos, targetRotZ, targetScale, alpha) {
+            object.position.lerp(targetPos, alpha);
+            object.rotation.z = object.rotation.z * (1 - alpha) + targetRotZ * alpha;
+            const currentS = object.scale.x;
+            const newS = currentS * (1 - alpha) + targetScale * alpha;
+            object.scale.set(newS, newS, newS);
+        }
+        
+        // --- MediaPipe Setup ---
+        const faceMesh = new FaceMesh({locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/face_mesh/${file}`});
+        faceMesh.setOptions({ maxNumFaces: 1, refineLandmarks: true, minDetectionConfidence: 0.75, minTrackingConfidence: 0.75 });
+        faceMesh.onResults(onFaceResults);
+
+        const hands = new Hands({locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${file}`});
+        hands.setOptions({ maxNumHands: 1, modelComplexity: 1, minDetectionConfidence: 0.75, minTrackingConfidence: 0.75 });
+        hands.onResults(onHandResults);
+
+
+        // --- Processing Logic ---
+
+        function onFaceResults(results) {
+            if (!results.multiFaceLandmarks || results.multiFaceLandmarks.length === 0) {
+                leftEarringGroup.visible = false;
+                rightEarringGroup.visible = false;
+                necklaceGroup.visible = false;
+                faceMask.position.set(0,0,1000);
+                currentEyeDist = 0; 
+                return;
+            }
+
+            const landmarks = results.multiFaceLandmarks[0];
+            const zScale = getZScale();
+
+            // --- HEAD TURN CHECK ---
+            const noseTip = landmarks[1];
+            const leftFaceEdge = landmarks[234];
+            const rightFaceEdge = landmarks[454];
+            
+            const dLeft = Math.abs(noseTip.x - leftFaceEdge.x);
+            const dRight = Math.abs(noseTip.x - rightFaceEdge.x);
+            const faceWidthRaw = dLeft + dRight;
+            const VISIBILITY_THRESHOLD = 0.25; 
+            const showLeftEar = (dLeft / faceWidthRaw) > VISIBILITY_THRESHOLD;
+            const showRightEar = (dRight / faceWidthRaw) > VISIBILITY_THRESHOLD;
+
+
+            // 1. UPDATE FACE MASK
+            const centerPos = mapCoord(noseTip.x, noseTip.y);
+            const maskZOffset = 0; 
+            const centerZ = -noseTip.z * zScale + maskZOffset;
+            
+            const positions = faceMask.geometry.attributes.position.array;
+            
+            positions[0] = centerPos.x;
+            positions[1] = centerPos.y;
+            positions[2] = centerZ;
+
+            for (let i = 0; i < FACE_OVAL_INDICES.length; i++) {
+                const idx = FACE_OVAL_INDICES[i];
+                const lm = landmarks[idx];
+                const pos = mapCoord(lm.x, lm.y);
+                const pZ = -lm.z * zScale + maskZOffset;
+                
+                const bufferIdx = (i + 1) * 3;
+                positions[bufferIdx] = pos.x;
+                positions[bufferIdx + 1] = pos.y;
+                positions[bufferIdx + 2] = pZ;
+            }
+            faceMask.geometry.attributes.position.needsUpdate = true;
+            faceMask.geometry.computeBoundingSphere();
+
+
+            // 2. Standard Calculations
+            const eyeDistWorld = getDistanceWorld(landmarks[33], landmarks[263]);
+            currentEyeDist = eyeDistWorld; 
+            
+            // [NEW] Calculate Face Height (Top Head #10 to Chin #152) for better vertical scaling
+            const faceHeightWorld = getDistanceWorld(landmarks[10], landmarks[152]);
+            
+            // --- Earrings ---
+            if (config.earring) {
+                const targetScale = eyeDistWorld * 5.0;
+                const gravityRot = 0; 
+
+                const leftLobe = landmarks[132]; 
+                const rightLobe = landmarks[361];
+                const centerFace = mapCoord(landmarks[168].x, landmarks[168].y); // Mid-eye
+                
+                // AUTOMATIC FIT LOGIC
+                // Reduced push (4%) for tighter fit
+                const autoPush = eyeDistWorld * 0.04; 
+                const autoDrop = 0;
+
+                // Left Ear
+                if (showLeftEar) {
+                    leftEarringGroup.visible = true;
+                    const posL = mapCoord(leftLobe.x, leftLobe.y);
+                    
+                    // Smart Push Out
+                    const pushVecL = new THREE.Vector3().subVectors(posL, centerFace).setZ(0).normalize();
+                    posL.add(pushVecL.multiplyScalar(autoPush));
+                    
+                    // Smart Drop
+                    posL.y -= autoDrop;
+
+                    posL.z = (-leftLobe.z * zScale); 
+                    smoothTransform(leftEarringGroup, posL, gravityRot, targetScale, SMOOTHING);
+                } else {
+                    leftEarringGroup.visible = false;
+                }
+
+                // Right Ear
+                if (showRightEar) {
+                    rightEarringGroup.visible = true;
+                    const posR = mapCoord(rightLobe.x, rightLobe.y);
+                    
+                    // Smart Push Out
+                    const pushVecR = new THREE.Vector3().subVectors(posR, centerFace).setZ(0).normalize();
+                    posR.add(pushVecR.multiplyScalar(autoPush));
+                    
+                    // Smart Drop
+                    posR.y -= autoDrop;
+                    
+                    posR.z = (-rightLobe.z * zScale);
+                    smoothTransform(rightEarringGroup, posR, gravityRot, targetScale, SMOOTHING);
+                } else {
+                    rightEarringGroup.visible = false;
+                }
+
+            } else {
+                leftEarringGroup.visible = false;
+                rightEarringGroup.visible = false;
+            }
+
+            // --- Necklace ---
+            if (config.necklace) {
+                necklaceGroup.visible = true;
+                
+                // NECK LOGIC FIX: "Virtual Neck" Calculation
+                const leftEarTragus = landmarks[234];
+                const rightEarTragus = landmarks[454];
+                
+                // Calculate the geometric center between ears (Stable Pivot)
+                const midEarX = (leftEarTragus.x + rightEarTragus.x) / 2;
+                const midEarY = (leftEarTragus.y + rightEarTragus.y) / 2;
+                
+                const pos = mapCoord(midEarX, midEarY);
+                
+                // Drop Calculation:
+                // Ears are high. Face Height is approx 20-25cm.
+                // [FIX] Reduced drop from 1.0 to 0.7.
+                // This brings it up from the chest to the base of the neck/collarbone.
+                const neckDrop = faceHeightWorld * 0.7; 
+                pos.y -= neckDrop;
+                
+                // Z-Depth Logic:
+                // Necklace should be behind the chin plane.
+                const chin = landmarks[152];
+                // Push back slightly less so it doesn't get buried in the neck
+                pos.z = (-chin.z * zScale) - (faceHeightWorld * 0.2); 
+                
+                // Width Scale
+                const targetScale = eyeDistWorld * 5.5;
+                
+                // Rotation: Dampen head roll
+                const leftEye = landmarks[33];
+                const rightEye = landmarks[263];
+                const dx = rightEye.x - leftEye.x;
+                const dy = rightEye.y - leftEye.y;
+                let headRoll = -Math.atan2(dy, dx); 
+                
+                const shoulderStableRot = headRoll * 0.05;
+
+                smoothTransform(necklaceGroup, pos, shoulderStableRot, targetScale, SMOOTHING);
+            } else {
+                necklaceGroup.visible = false;
+            }
+        }
+
+        function onHandResults(results) {
+            if (!results.multiHandLandmarks || results.multiHandLandmarks.length === 0) {
+                ringGroup.visible = false;
+                return;
+            }
+
+            const landmarks = results.multiHandLandmarks[0];
+
+            if (config.ring) {
+                ringGroup.visible = true;
+                
+                const mcp = landmarks[13]; 
+                const pip = landmarks[14]; 
+                
+                const midX = (mcp.x + pip.x) / 2;
+                const midY = (mcp.y + pip.y) / 2;
+                const pos = mapCoord(midX, midY);
+
+                const posMCP = mapCoord(mcp.x, mcp.y);
+                const posPIP = mapCoord(pip.x, pip.y);
+                
+                const vecX = posPIP.x - posMCP.x;
+                const vecY = posPIP.y - posMCP.y;
+                const angle = Math.atan2(vecY, vecX);
+                const targetRotZ = angle - (Math.PI / 2);
+
+                const handLenWorld = getDistanceWorld(landmarks[0], landmarks[9]);
+                const targetScale = handLenWorld * 4.5;
+                
+                if (currentEyeDist > 0) {
+                    const normalRatio = 0.85; 
+                    const zScale = getZScale();
+                    const depthFactor = 6.0; 
+                    const zShift = (handLenWorld - (currentEyeDist * normalRatio)) * zScale * depthFactor;
+                    pos.z = zShift;
+                } else {
+                    pos.z = 0;
+                }
+
+                smoothTransform(ringGroup, pos, targetRotZ, targetScale, SMOOTHING);
+                
+            } else {
+                ringGroup.visible = false;
+            }
+        }
+
+        // --- Camera & Render Loop ---
+
+        const cameraUtils = new Camera(videoElement, {
+            onFrame: async () => {
+                await faceMesh.send({image: videoElement});
+                await hands.send({image: videoElement});
+                renderer.render(scene, camera);
+            },
+            width: 1280,
+            height: 720
+        });
+
+        cameraUtils.start()
+            .then(() => loader.style.display = 'none')
+            .catch(err => loader.innerHTML = `<p class="text-red-500">Error: ${err.message}</p>`);
+
+
+        // --- UI & Events ---
+        document.getElementById('toggle-earring').addEventListener('change', (e) => config.earring = e.target.checked);
+        document.getElementById('toggle-necklace').addEventListener('change', (e) => config.necklace = e.target.checked);
+        document.getElementById('toggle-ring').addEventListener('change', (e) => config.ring = e.target.checked);
+        
+        window.addEventListener('resize', () => {
+            const newAspect = window.innerWidth / window.innerHeight;
+            camera.left = -newAspect;
+            camera.right = newAspect;
+            camera.top = 1;
+            camera.bottom = -1;
+            camera.updateProjectionMatrix();
+            renderer.setSize(window.innerWidth, window.innerHeight);
+        });
+
+    </script>
+</body>
+</html>
