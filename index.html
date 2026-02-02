@@ -13,21 +13,22 @@
             width: 100vw; 
             height: 100vh; 
             overflow: hidden;
+            display: flex;
+            justify-content: center;
+            align-items: center;
         }
         
-        /* Video: Cover fills the screen (Zoomed) */
+        /* Video: Contain shows the full sensor (Zoomed Out) */
         #input-video { 
             position: absolute;
-            top: 50%;
-            left: 50%;
-            transform: translate(-50%, -50%) scaleX(-1);
             width: 100%; 
             height: 100%; 
-            object-fit: cover; 
+            object-fit: contain; 
+            transform: scaleX(-1); 
             opacity: 1; 
         }
         
-        /* Canvas: Absolute on top, sized via JS */
+        /* Canvas: Absolute on top, matches container size */
         #output-canvas { 
             position: absolute;
             top: 0; left: 0;
@@ -98,12 +99,12 @@
 
     <div id="loader">
         <div class="spinner"></div>
-        <p>Calibrating High-Perf...</p>
+        <p>Calibrating...</p>
     </div>
 
     <div id="ui-layer">
         <h1 class="text-xl font-bold mb-2 text-amber-400 tracking-wider">LUXE TRY-ON</h1>
-        <div class="status-pill">Immersive View</div>
+        <div class="status-pill">Full View Mode</div>
         
         <div class="toggle-item">
             <span class="toggle-label">Earrings</span>
@@ -121,8 +122,8 @@
         </div>
         
         <div class="mt-4 pt-4 border-t border-gray-700 text-xs text-gray-400">
-            <p>Optimized for Mobile.</p>
-            <p>Full screen precision.</p>
+            <p>Optimized for accuracy.</p>
+            <p>Full camera view.</p>
         </div>
     </div>
 
@@ -141,7 +142,7 @@
             ring: true
         };
         
-        // Smoothing Factor (Slightly increased for smoother feel)
+        // Smoothing Factor
         const SMOOTHING = 0.5;
 
         let currentEyeDist = 0; 
@@ -267,7 +268,8 @@
         scene.add(ringGroup);
 
 
-        // --- ROBUST COVER MAPPING LOGIC (Zoom & Crop Aware) ---
+        // --- ROBUST MAPPING LOGIC (Fit Screen / Contain) ---
+        // Accurately maps 3D objects to the video pixels, accounting for black bars.
         
         function mapCoord(x, y) {
             const vw = videoElement.videoWidth || 1280;
@@ -279,48 +281,41 @@
             const screenH = window.innerHeight;
             const screenAspect = screenW / screenH;
 
-            // Calculate the dimensions of the video AS RENDERED on screen (Object-Fit: Cover)
+            // Calculate dimensions of the video on screen (CONTAIN mode)
             let renderW, renderH;
-            let offsetX = 0, offsetY = 0;
+            let startX = 0, startY = 0;
 
             if (screenAspect > videoAspect) {
-                // Screen is Wider: Video fits width, gets cropped vertically (Top/Bottom hidden)
+                // Screen is wider: Video fits height, bars on sides (Pillarbox)
+                renderH = screenH;
+                renderW = screenH * videoAspect;
+                startX = (screenW - renderW) / 2;
+            } else {
+                // Screen is taller: Video fits width, bars on top/bottom (Letterbox)
                 renderW = screenW;
                 renderH = screenW / videoAspect;
-                offsetY = (renderH - screenH) / 2;
-            } else {
-                // Screen is Taller: Video fits height, gets cropped horizontally (Left/Right hidden)
-                renderW = screenH * videoAspect;
-                renderH = screenH;
-                offsetX = (renderW - screenW) / 2;
+                startY = (screenH - renderH) / 2;
             }
 
-            // Convert Normalized (0..1) to Rendered Pixels
-            // (0,0) is top-left of the original video
-            let px = x * renderW;
-            let py = y * renderH;
+            // Convert Normalized (0..1) to Screen Pixels (including offsets)
+            const px = startX + (x * renderW);
+            const py = startY + (y * renderH);
 
-            // Shift coordinates to account for the cropped area (centering)
-            px -= offsetX;
-            py -= offsetY;
+            // Convert Screen Pixels to 3D World Units
+            // Ortho Camera maps: Width = 2*aspect, Height = 2
+            const worldH = 2;
+            const worldW = worldH * screenAspect;
 
-            // Convert to 3D World (Center is 0,0)
-            // Screen Width in World Units = (camera.right - camera.left) = 2 * aspect
-            // Screen Height in World Units = (camera.top - camera.bottom) = 2
-            
-            const worldH = 2; // Ortho height constant
-            const worldW = worldH * (screenW / screenH); // Match screen aspect
-
-            // Map [0..screenW] to [-worldW/2 .. +worldW/2]
+            // Map 0..screenW -> -worldW/2 .. +worldW/2
             const nx = (px / screenW) * worldW - (worldW / 2);
-            // Map [0..screenH] to [worldH/2 .. -worldH/2] (Flip Y)
+            // Map 0..screenH -> +worldH/2 .. -worldH/2 (Y is flipped in 3D)
             const ny = (worldH / 2) - (py / screenH) * worldH;
 
             return new THREE.Vector3(nx, ny, 0);
         }
         
         function getZScale() {
-            // Scale Z depth based on face width in world units roughly
+            // Scale Z depth based on world scale
             return 2.5; 
         }
 
@@ -342,7 +337,7 @@
         const faceMesh = new FaceMesh({locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/face_mesh/${file}`});
         faceMesh.setOptions({ 
             maxNumFaces: 1, 
-            refineLandmarks: false, // PERFORMANCE: Disable iris tracking for speed
+            refineLandmarks: false, // PERFORMANCE: Disable iris tracking
             minDetectionConfidence: 0.5, 
             minTrackingConfidence: 0.5 
         });
@@ -351,7 +346,7 @@
         const hands = new Hands({locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${file}`});
         hands.setOptions({ 
             maxNumHands: 1, 
-            modelComplexity: 0, // PERFORMANCE: Use Lite model
+            modelComplexity: 0, // PERFORMANCE: Lite model
             minDetectionConfidence: 0.5, 
             minTrackingConfidence: 0.5 
         });
@@ -402,6 +397,7 @@
             // --- Earrings ---
             if (config.earring) {
                 const targetScale = eyeDistWorld * 5.0;
+                // Using precise anatomical lobe tips (132/361)
                 const leftLobe = landmarks[132]; 
                 const rightLobe = landmarks[361];
 
