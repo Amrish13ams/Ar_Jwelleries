@@ -14,26 +14,32 @@
             height: 100vh; 
             overflow: hidden;
             background-color: #000;
+            display: flex;
+            justify-content: center;
+            align-items: center;
         }
         
-        /* Elements are positioned absolutely by JS for perfect alignment */
-        #input-video, #output-canvas { 
-            position: absolute;
-            top: 0; left: 0;
-            transform-origin: top left;
-        }
-
+        /* CRITICAL FIX: 
+           We remove object-fit: cover/contain from CSS.
+           We allow JS to explicitly set width/height/top/left.
+           This ensures Video and Canvas are physically identical rectangles.
+        */
         #input-video {
-            transform: scaleX(-1); /* Mirror video */
+            position: absolute;
+            transform: scaleX(-1);
             display: block;
-            width: 100%;
-            height: 100%;
-            object-fit: cover; /* Fill the screen */
+            /* Reset default constraints */
+            max-width: none;
+            max-height: none;
+            width: auto;
+            height: auto;
         }
 
         #output-canvas { 
+            position: absolute;
+            transform: scaleX(-1);
             pointer-events: none;
-            transform: scaleX(-1); /* Mirror 3D context to match */
+            /* Canvas size also managed by JS */
         }
         
         /* UI Overlay */
@@ -95,12 +101,12 @@
 
     <div id="loader">
         <div class="spinner"></div>
-        <p>Syncing Displays...</p>
+        <p>Aligning Video...</p>
     </div>
 
     <div id="ui-layer">
         <h1 class="text-xl font-bold mb-2 text-amber-400 tracking-wider">LUXE TRY-ON</h1>
-        <div class="status-pill">Perfect Sync Mode</div>
+        <div class="status-pill">Locked Sync Mode</div>
         
         <div class="toggle-item">
             <span class="toggle-label">Earrings</span>
@@ -118,8 +124,8 @@
         </div>
         
         <div class="mt-4 pt-4 border-t border-gray-700 text-xs text-gray-400">
-            <p>Video & 3D Layer Locked.</p>
-            <p>100% Alignment.</p>
+            <p>1:1 Physical Alignment.</p>
+            <p>Fixed for Mobile.</p>
         </div>
     </div>
 
@@ -141,10 +147,6 @@
         const SMOOTHING = 0.5;
         let currentEyeDist = 0; 
         
-        // Globals for layout calculations
-        let videoRenderW = 0, videoRenderH = 0;
-        let videoOffsetX = 0, videoOffsetY = 0;
-
         const FACE_OVAL_INDICES = [
             10, 338, 297, 332, 284, 251, 389, 356, 454, 323, 361, 288, 397, 365, 379, 378, 400, 377, 152, 
             148, 176, 149, 150, 136, 172, 58, 132, 93, 234, 127, 162, 21, 54, 103, 67, 109
@@ -264,71 +266,78 @@
         scene.add(ringGroup);
 
 
-        // --- LAYOUT & MAPPING LOGIC ---
-        // Dynamically calculates the "Cover" crop to ensure 3D matches Video perfectly
+        // --- LOCKED LAYOUT ENGINE (Manual Alignment) ---
+        // We calculate the exact size the video SHOULD be to cover the screen
+        // And then we force BOTH the video and canvas to those exact pixels.
+        // This bypasses browser inconsistencies with 'object-fit'.
         
         function updateLayout() {
             const w = window.innerWidth;
             const h = window.innerHeight;
             
-            // Get actual source dimensions (fallback to standard if not ready)
+            // Get actual source dimensions (fallback if not loaded)
             const vw = videoElement.videoWidth || 1280;
             const vh = videoElement.videoHeight || 720;
             const videoAspect = vw / vh;
-            const screenAspect = w / h;
-
-            // Calculate the actual size of the video element rendered on screen (object-fit: cover)
-            if (screenAspect > videoAspect) {
-                // Screen is wider: Video fills width, crops height
-                videoRenderW = w;
-                videoRenderH = w / videoAspect;
-                videoOffsetX = 0;
-                videoOffsetY = (videoRenderH - h) / 2;
-            } else {
-                // Screen is taller: Video fills height, crops width
-                videoRenderW = h * videoAspect;
-                videoRenderH = h;
-                videoOffsetX = (videoRenderW - w) / 2;
-                videoOffsetY = 0;
-            }
-
-            // Update Renderer to full window size
-            renderer.setSize(w, h);
+            const windowAspect = w / h;
             
-            // Update Camera Aspect
-            const newAspect = w / h;
-            camera.left = -newAspect;
-            camera.right = newAspect;
+            // Calculate Cover Dimensions (What sizes would fill the screen?)
+            let renderW, renderH;
+            
+            if (windowAspect > videoAspect) {
+                // Screen is wider: Video fits width, crops height (Top/Bottom)
+                renderW = w;
+                renderH = w / videoAspect;
+            } else {
+                // Screen is taller: Video fits height, crops width (Left/Right)
+                renderH = h;
+                renderW = h * videoAspect;
+            }
+            
+            // Calculate Centering Offsets (Negative values to pull content center)
+            const left = (w - renderW) / 2;
+            const top = (h - renderH) / 2;
+            
+            // 1. Force Video Element Size & Position
+            videoElement.style.width = `${renderW}px`;
+            videoElement.style.height = `${renderH}px`;
+            videoElement.style.left = `${left}px`;
+            videoElement.style.top = `${top}px`;
+            
+            // 2. Force Canvas Element Size & Position (Identical to Video)
+            canvasElement.style.width = `${renderW}px`;
+            canvasElement.style.height = `${renderH}px`;
+            canvasElement.style.left = `${left}px`;
+            canvasElement.style.top = `${top}px`;
+            
+            // 3. Resize WebGL Buffer (Matches Render Size)
+            renderer.setSize(renderW, renderH);
+            
+            // 4. Update Camera Frustum to match Aspect Ratio
+            // Ortho Width = 2 * aspect, Height = 2
+            const aspect = renderW / renderH;
+            camera.left = -aspect;
+            camera.right = aspect;
             camera.top = 1;
             camera.bottom = -1;
             camera.updateProjectionMatrix();
         }
 
+        // Simple Mapping: Since Canvas == Video 1:1, we map 0..1 to Ortho bounds directly
         function mapCoord(x, y) {
-            // 1. Convert normalized (0..1) to Projected Pixel Coordinates (Relative to the zoomed video)
-            const px = x * videoRenderW;
-            const py = y * videoRenderH;
+            const aspect = camera.right; // stored aspect from updateLayout
             
-            // 2. Subtract Offsets to get Screen Coordinates (Relative to window top-left)
-            const screenX = px - videoOffsetX;
-            const screenY = py - videoOffsetY;
+            // Map x (0..1) -> (-aspect .. +aspect)
+            const nx = (x - 0.5) * 2 * aspect;
+            // Map y (0..1) -> (1 .. -1) (Flipped)
+            const ny = -(y - 0.5) * 2;
             
-            // 3. Convert Screen Pixels to Normalized Device Coordinates (-1 to 1)
-            const screenW = window.innerWidth;
-            const screenH = window.innerHeight;
-            const ndcX = (screenX / screenW) * 2 - 1;
-            const ndcY = -(screenY / screenH) * 2 + 1; // Flip Y for 3D
-            
-            // 4. Map to Orthographic World Space
-            const worldX = ndcX * camera.right;
-            const worldY = ndcY * camera.top;
-            
-            return new THREE.Vector3(worldX, worldY, 0);
+            return new THREE.Vector3(nx, ny, 0);
         }
         
         function getZScale() {
-            // Scale Z depth based on world scale
-            return camera.right * 3.0; 
+            // Scale Z depth based on world width
+            return camera.right * 2.5; 
         }
 
         function getDistanceWorld(p1, p2) {
@@ -349,7 +358,7 @@
         const faceMesh = new FaceMesh({locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/face_mesh/${file}`});
         faceMesh.setOptions({ 
             maxNumFaces: 1, 
-            refineLandmarks: true, 
+            refineLandmarks: false, 
             minDetectionConfidence: 0.5, 
             minTrackingConfidence: 0.5 
         });
@@ -358,7 +367,7 @@
         const hands = new Hands({locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${file}`});
         hands.setOptions({ 
             maxNumHands: 1, 
-            modelComplexity: 1, 
+            modelComplexity: 0,
             minDetectionConfidence: 0.5, 
             minTrackingConfidence: 0.5 
         });
@@ -380,7 +389,6 @@
             const landmarks = results.multiFaceLandmarks[0];
             const zScale = getZScale();
 
-            // --- HEAD TURN CHECK ---
             const noseTip = landmarks[1];
             const dLeft = Math.abs(noseTip.x - landmarks[234].x);
             const dRight = Math.abs(noseTip.x - landmarks[454].x);
@@ -389,26 +397,20 @@
             const showLeftEar = (dLeft / faceWidthRaw) > VISIBILITY_THRESHOLD;
             const showRightEar = (dRight / faceWidthRaw) > VISIBILITY_THRESHOLD;
 
-            // 1. UPDATE FACE MASK
+            // 1. Update Mask
             const centerPos = mapCoord(noseTip.x, noseTip.y);
-            const maskZOffset = 0; 
-            const centerZ = -noseTip.z * zScale + maskZOffset;
-            
             const positions = faceMask.geometry.attributes.position.array;
-            positions[0] = centerPos.x; positions[1] = centerPos.y; positions[2] = centerZ;
-
+            positions[0] = centerPos.x; positions[1] = centerPos.y; positions[2] = -noseTip.z * zScale;
             for (let i = 0; i < FACE_OVAL_INDICES.length; i++) {
-                const idx = FACE_OVAL_INDICES[i];
-                const lm = landmarks[idx];
+                const lm = landmarks[FACE_OVAL_INDICES[i]];
                 const pos = mapCoord(lm.x, lm.y);
-                const pZ = -lm.z * zScale + maskZOffset;
-                const bufferIdx = (i + 1) * 3;
-                positions[bufferIdx] = pos.x; positions[bufferIdx + 1] = pos.y; positions[bufferIdx + 2] = pZ;
+                const idx = (i + 1) * 3;
+                positions[idx] = pos.x; positions[idx+1] = pos.y; positions[idx+2] = -lm.z * zScale;
             }
             faceMask.geometry.attributes.position.needsUpdate = true;
             faceMask.geometry.computeBoundingSphere();
 
-            // 2. Standard Calculations
+            // 2. Metrics
             const eyeDistWorld = getDistanceWorld(landmarks[33], landmarks[263]);
             currentEyeDist = eyeDistWorld; 
             const faceHeightWorld = getDistanceWorld(landmarks[10], landmarks[152]);
@@ -508,7 +510,7 @@
             } else ringGroup.visible = false;
         }
 
-        // --- Camera & Render Loop ---
+        // --- Camera & Resizing ---
 
         const isMobile = window.innerWidth < window.innerHeight;
         const cameraConfig = {
@@ -517,10 +519,10 @@
                 await hands.send({image: videoElement});
                 renderer.render(scene, camera);
             },
-            // Request resolutions that match screen aspect if possible
-            // Mobile: Portrait (e.g. 720x1280), Desktop: Landscape
-            width: isMobile ? { ideal: 720 } : { ideal: 1280 },
-            height: isMobile ? { ideal: 1280 } : { ideal: 720 },
+            // [FIX] Request 4:3 (e.g., 640x480 or 480x640) which is standard for webcams/phones
+            // This reduces the cropping significantly compared to requesting 16:9
+            width: { ideal: isMobile ? 480 : 1280 },
+            height: { ideal: isMobile ? 640 : 960 },
             facingMode: 'user'
         };
 
@@ -542,8 +544,12 @@
         window.addEventListener('orientationchange', () => setTimeout(updateLayout, 100));
         videoElement.addEventListener('loadedmetadata', updateLayout);
         
-        // Initial sizing check
-        setTimeout(updateLayout, 500);
+        // Periodic check to fix layout shifts
+        setInterval(() => {
+            if (videoElement.videoWidth > 0 && Math.abs(videoElement.clientWidth - canvasElement.clientWidth) > 2) {
+                updateLayout();
+            }
+        }, 1000);
 
     </script>
 </body>
