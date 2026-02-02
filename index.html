@@ -19,65 +19,64 @@
             align-items: center;
         }
         
-        /* CRITICAL FIX: 
-           We remove object-fit: cover/contain from CSS.
-           We allow JS to explicitly set width/height/top/left.
-           This ensures Video and Canvas are physically identical rectangles.
-        */
+        /* LOCKED LAYOUT: Elements positioned by JS for 1:1 alignment */
         #input-video {
             position: absolute;
             transform: scaleX(-1);
             display: block;
-            /* Reset default constraints */
-            max-width: none;
-            max-height: none;
-            width: auto;
-            height: auto;
+            /* Reset constraints, JS controls size */
+            max-width: none; max-height: none; width: auto; height: auto;
         }
 
         #output-canvas { 
             position: absolute;
-            transform: scaleX(-1);
             pointer-events: none;
+            transform: scaleX(-1);
             /* Canvas size also managed by JS */
         }
         
-        /* UI Overlay */
+        /* --- MINIMIZED UI OVERLAY --- */
         #ui-layer {
-            position: absolute; top: 20px; left: 20px; z-index: 10;
-            background: rgba(0, 0, 0, 0.6); backdrop-filter: blur(8px);
-            padding: 20px; border-radius: 16px; border: 1px solid rgba(255,255,255,0.15);
-            color: white; width: 260px;
-            box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.2);
+            position: absolute; top: 12px; left: 12px; z-index: 10;
+            background: rgba(0, 0, 0, 0.5); backdrop-filter: blur(4px);
+            padding: 8px 10px; border-radius: 8px; border: 1px solid rgba(255,255,255,0.15);
+            color: white; width: 130px; /* Fixed small width */
+            box-shadow: 0 2px 4px -1px rgba(0, 0, 0, 0.2);
         }
 
         @media (max-width: 600px) {
             #ui-layer {
-                width: calc(100% - 40px);
-                bottom: 30px;
-                top: auto;
-                left: 20px;
+                top: 12px; left: 12px; bottom: auto; right: auto;
             }
         }
 
-        .toggle-item { display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px; }
-        .toggle-label { font-size: 0.95rem; font-weight: 500; color: #e5e7eb; }
+        .toggle-item { display: flex; justify-content: space-between; align-items: center; margin-bottom: 4px; }
+        .toggle-label { font-size: 0.65rem; font-weight: 500; color: #d1d5db; }
         
+        /* Loader */
         #loader {
-            position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%);
-            color: white; z-index: 20; text-align: center; width: 100%; pointer-events: none;
+            position: absolute; top: 0; left: 0; width: 100%; height: 100%;
+            background: #000; z-index: 50; display: flex; flex-direction: column;
+            justify-content: center; align-items: center; text-align: center;
         }
         .spinner {
-            border: 4px solid rgba(255,255,255,0.3); border-radius: 50%; border-top: 4px solid #fbbf24;
-            width: 40px; height: 40px; animation: spin 1s linear infinite; margin: 0 auto 10px auto;
+            border: 3px solid rgba(255,255,255,0.3); border-radius: 50%; border-top: 3px solid #fbbf24;
+            width: 30px; height: 30px; animation: spin 1s linear infinite; margin-bottom: 12px;
         }
         @keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
 
+        /* Start Button */
+        #start-btn {
+            display: none; margin-top: 16px; padding: 8px 16px;
+            background-color: #fbbf24; color: black; font-weight: bold;
+            border-radius: 6px; cursor: pointer; font-size: 0.8rem;
+        }
+
         .status-pill {
-            display: inline-block; padding: 4px 8px; border-radius: 12px;
+            display: inline-block; padding: 1px 5px; border-radius: 4px;
             background: rgba(16, 185, 129, 0.2); color: #6ee7b7;
-            font-size: 0.7rem; font-weight: 600; text-transform: uppercase; letter-spacing: 0.05em;
-            margin-bottom: 16px;
+            font-size: 0.45rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.05em;
+            margin-bottom: 6px;
         }
     </style>
 
@@ -101,12 +100,15 @@
 
     <div id="loader">
         <div class="spinner"></div>
-        <p>Aligning Video...</p>
+        <p id="status-text" class="text-gray-400 text-xs">Initializing...</p>
+        <button id="start-btn" onclick="startCameraManual()">Start Camera</button>
+        <div id="error-msg" class="text-red-500 mt-4 px-4 text-xs hidden"></div>
     </div>
 
+    <!-- Minimized UI -->
     <div id="ui-layer">
         <h1 class="text-[10px] font-bold mb-1 text-amber-400 tracking-wider">LUXE TRY-ON</h1>
-        <div class="status-pill">Synced</div>
+        <div class="status-pill">Ready</div>
         
         <div class="toggle-item">
             <span class="toggle-label">Earrings</span>
@@ -123,14 +125,14 @@
             <input type="checkbox" id="toggle-ring" checked class="accent-amber-500 w-3 h-3 cursor-pointer">
         </div>
         
-        <div class="mt-2 pt-2 border-t border-gray-700 text-[8px] text-gray-500 leading-tight">
-            <p>Aligned</p>
+        <div class="mt-2 pt-1 border-t border-gray-700 text-[7px] text-gray-500 leading-tight">
+            <p>1:1 Sync</p>
             <p>Mobile Fix</p>
         </div>
     </div>
 
     <div id="canvas-container">
-        <video id="input-video" playsinline></video>
+        <video id="input-video" playsinline muted autoplay></video>
         <canvas id="output-canvas"></canvas>
     </div>
 
@@ -138,12 +140,7 @@
         import * as THREE from 'three';
 
         // --- Configuration ---
-        const config = {
-            earring: true,
-            necklace: true,
-            ring: true
-        };
-        
+        const config = { earring: true, necklace: true, ring: true };
         const SMOOTHING = 0.5;
         let currentEyeDist = 0; 
         
@@ -157,27 +154,21 @@
         const videoElement = document.getElementById('input-video');
         const canvasElement = document.getElementById('output-canvas');
         const loader = document.getElementById('loader');
+        const statusText = document.getElementById('status-text');
+        const startBtn = document.getElementById('start-btn');
+        const errorMsg = document.getElementById('error-msg');
         
-        // --- ERROR HANDLING ---
+        // --- PRE-CHECK ---
         if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
-            const isFile = window.location.protocol === 'file:';
-            let errorMsg = "Camera API is not available.";
-            if (isFile) errorMsg = "<b>Error:</b> File opened locally. Use a local server (localhost).";
-            else errorMsg = "<b>Error:</b> HTTPS required for camera access.";
-
-            loader.style.pointerEvents = "auto"; 
-            loader.innerHTML = `
-                <div class="text-red-400 p-6 bg-gray-900 border border-red-800 rounded-xl max-w-sm mx-auto shadow-2xl">
-                    <h3 class="font-bold text-lg mb-2">⚠️ Camera Blocked</h3>
-                    <p class="text-sm text-gray-300">${errorMsg}</p>
-                </div>`;
+            statusText.innerText = "Camera API Unavailable";
+            errorMsg.innerHTML = "Use HTTPS or localhost.";
+            errorMsg.classList.remove('hidden');
+            document.querySelector('.spinner').style.display = 'none';
             throw new Error("Camera API not found");
         }
 
         // --- Three.js Setup ---
         const scene = new THREE.Scene();
-        
-        // Camera setup - Updated in updateLayout
         const camera = new THREE.OrthographicCamera(-1, 1, 1, -1, 0.1, 1000);
         camera.position.z = 10;
 
@@ -185,7 +176,6 @@
         renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
         renderer.sortObjects = true;
 
-        // Lighting
         const ambientLight = new THREE.AmbientLight(0xffffff, 0.7);
         scene.add(ambientLight);
         const dirLight = new THREE.DirectionalLight(0xfffcdd, 1.2);
@@ -195,17 +185,12 @@
         spotLight.position.set(-5, 0, 5);
         scene.add(spotLight);
 
-        // Materials
-        const goldMaterial = new THREE.MeshStandardMaterial({
-            color: 0xffd700, metalness: 0.9, roughness: 0.2, emissive: 0x442200, emissiveIntensity: 0.1
-        });
-        const gemMaterial = new THREE.MeshPhysicalMaterial({
-            color: 0xffffff, metalness: 0.1, roughness: 0.05, transmission: 0.9, thickness: 1.0, ior: 2.4
-        });
+        const goldMaterial = new THREE.MeshStandardMaterial({ color: 0xffd700, metalness: 0.9, roughness: 0.2, emissive: 0x442200, emissiveIntensity: 0.1 });
+        const gemMaterial = new THREE.MeshPhysicalMaterial({ color: 0xffffff, metalness: 0.1, roughness: 0.05, transmission: 0.9, thickness: 1.0, ior: 2.4 });
         const maskMaterial = new THREE.MeshBasicMaterial({ color: 0x000000, colorWrite: false });
 
         // --- Models ---
-        // 0. Face Occluder
+        // Face Mask
         const maskGeometry = new THREE.BufferGeometry();
         const maskVertices = new Float32Array((FACE_OVAL_INDICES.length + 1) * 3);
         maskGeometry.setAttribute('position', new THREE.BufferAttribute(maskVertices, 3));
@@ -222,7 +207,7 @@
         faceMask.matrixAutoUpdate = false; 
         scene.add(faceMask);
 
-        // 1. Earring Group (Left) - Linear Drop
+        // Earrings
         const leftEarringGroup = new THREE.Group();
         const stud = new THREE.Mesh(new THREE.OctahedronGeometry(0.015), gemMaterial);
         const barHeight = 0.05;
@@ -233,11 +218,10 @@
         leftEarringGroup.add(stud, bar, bigDrop);
         leftEarringGroup.visible = false;
         scene.add(leftEarringGroup);
-
         const rightEarringGroup = leftEarringGroup.clone();
         scene.add(rightEarringGroup);
 
-        // 2. Necklace Group
+        // Necklace
         const necklaceGroup = new THREE.Group();
         const chainGeo = new THREE.TorusGeometry(0.18, 0.006, 16, 60, Math.PI); 
         const chain = new THREE.Mesh(chainGeo, goldMaterial);
@@ -249,7 +233,7 @@
         necklaceGroup.visible = false;
         scene.add(necklaceGroup);
 
-        // 3. Ring Group
+        // Ring
         const ringGroup = new THREE.Group();
         const ringMeshContainer = new THREE.Group(); 
         const band = new THREE.Mesh(new THREE.TorusGeometry(0.035, 0.005, 16, 50), goldMaterial);
@@ -267,85 +251,56 @@
 
 
         // --- LOCKED LAYOUT ENGINE (Manual Alignment) ---
-        // We calculate the exact size the video SHOULD be to cover the screen
-        // And then we force BOTH the video and canvas to those exact pixels.
-        // This bypasses browser inconsistencies with 'object-fit'.
-        
         function updateLayout() {
             const w = window.innerWidth;
             const h = window.innerHeight;
-            
-            // Get actual source dimensions (fallback if not loaded)
             const vw = videoElement.videoWidth || 1280;
             const vh = videoElement.videoHeight || 720;
             const videoAspect = vw / vh;
             const windowAspect = w / h;
             
-            // Calculate Cover Dimensions (What sizes would fill the screen?)
             let renderW, renderH;
-            
             if (windowAspect > videoAspect) {
-                // Screen is wider: Video fits width, crops height (Top/Bottom)
-                renderW = w;
-                renderH = w / videoAspect;
+                renderW = w; renderH = w / videoAspect;
             } else {
-                // Screen is taller: Video fits height, crops width (Left/Right)
-                renderH = h;
-                renderW = h * videoAspect;
+                renderH = h; renderW = h * videoAspect;
             }
             
-            // Calculate Centering Offsets (Negative values to pull content center)
             const left = (w - renderW) / 2;
             const top = (h - renderH) / 2;
             
-            // 1. Force Video Element Size & Position
             videoElement.style.width = `${renderW}px`;
             videoElement.style.height = `${renderH}px`;
             videoElement.style.left = `${left}px`;
             videoElement.style.top = `${top}px`;
+            videoElement.style.objectFit = 'fill'; 
             
-            // 2. Force Canvas Element Size & Position (Identical to Video)
             canvasElement.style.width = `${renderW}px`;
             canvasElement.style.height = `${renderH}px`;
             canvasElement.style.left = `${left}px`;
             canvasElement.style.top = `${top}px`;
             
-            // 3. Resize WebGL Buffer (Matches Render Size)
             renderer.setSize(renderW, renderH);
             
-            // 4. Update Camera Frustum to match Aspect Ratio
-            // Ortho Width = 2 * aspect, Height = 2
             const aspect = renderW / renderH;
-            camera.left = -aspect;
-            camera.right = aspect;
-            camera.top = 1;
-            camera.bottom = -1;
+            camera.left = -aspect; camera.right = aspect;
+            camera.top = 1; camera.bottom = -1;
             camera.updateProjectionMatrix();
         }
 
-        // Simple Mapping: Since Canvas == Video 1:1, we map 0..1 to Ortho bounds directly
         function mapCoord(x, y) {
-            const aspect = camera.right; // stored aspect from updateLayout
-            
-            // Map x (0..1) -> (-aspect .. +aspect)
+            const aspect = camera.right; 
             const nx = (x - 0.5) * 2 * aspect;
-            // Map y (0..1) -> (1 .. -1) (Flipped)
             const ny = -(y - 0.5) * 2;
-            
             return new THREE.Vector3(nx, ny, 0);
         }
         
-        function getZScale() {
-            // Scale Z depth based on world width
-            return camera.right * 2.5; 
-        }
-
+        function getZScale() { return camera.right * 2.5; }
         function getDistanceWorld(p1, p2) {
              const v1 = mapCoord(p1.x, p1.y);
              const v2 = mapCoord(p2.x, p2.y);
              return v1.distanceTo(v2);
         }
-
         function smoothTransform(object, targetPos, targetRotZ, targetScale, alpha) {
             object.position.lerp(targetPos, alpha);
             object.rotation.z = object.rotation.z * (1 - alpha) + targetRotZ * alpha;
@@ -356,48 +311,23 @@
         
         // --- MediaPipe Setup ---
         const faceMesh = new FaceMesh({locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/face_mesh/${file}`});
-        faceMesh.setOptions({ 
-            maxNumFaces: 1, 
-            refineLandmarks: false, 
-            minDetectionConfidence: 0.5, 
-            minTrackingConfidence: 0.5 
-        });
+        faceMesh.setOptions({ maxNumFaces: 1, refineLandmarks: false, minDetectionConfidence: 0.5, minTrackingConfidence: 0.5 });
         faceMesh.onResults(onFaceResults);
 
         const hands = new Hands({locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${file}`});
-        hands.setOptions({ 
-            maxNumHands: 1, 
-            modelComplexity: 0,
-            minDetectionConfidence: 0.5, 
-            minTrackingConfidence: 0.5 
-        });
+        hands.setOptions({ maxNumHands: 1, modelComplexity: 0, minDetectionConfidence: 0.5, minTrackingConfidence: 0.5 });
         hands.onResults(onHandResults);
-
-
-        // --- Processing Logic ---
 
         function onFaceResults(results) {
             if (!results.multiFaceLandmarks || results.multiFaceLandmarks.length === 0) {
-                leftEarringGroup.visible = false;
-                rightEarringGroup.visible = false;
-                necklaceGroup.visible = false;
-                faceMask.position.set(0,0,1000);
-                currentEyeDist = 0; 
-                return;
+                leftEarringGroup.visible = false; rightEarringGroup.visible = false; necklaceGroup.visible = false;
+                faceMask.position.set(0,0,1000); currentEyeDist = 0; return;
             }
-
             const landmarks = results.multiFaceLandmarks[0];
             const zScale = getZScale();
-
             const noseTip = landmarks[1];
-            const dLeft = Math.abs(noseTip.x - landmarks[234].x);
-            const dRight = Math.abs(noseTip.x - landmarks[454].x);
-            const faceWidthRaw = dLeft + dRight;
-            const VISIBILITY_THRESHOLD = 0.25; 
-            const showLeftEar = (dLeft / faceWidthRaw) > VISIBILITY_THRESHOLD;
-            const showRightEar = (dRight / faceWidthRaw) > VISIBILITY_THRESHOLD;
-
-            // 1. Update Mask
+            
+            // Mask Update
             const centerPos = mapCoord(noseTip.x, noseTip.y);
             const positions = faceMask.geometry.attributes.position.array;
             positions[0] = centerPos.x; positions[1] = centerPos.y; positions[2] = -noseTip.z * zScale;
@@ -410,30 +340,31 @@
             faceMask.geometry.attributes.position.needsUpdate = true;
             faceMask.geometry.computeBoundingSphere();
 
-            // 2. Metrics
+            // Logic
             const eyeDistWorld = getDistanceWorld(landmarks[33], landmarks[263]);
             currentEyeDist = eyeDistWorld; 
             const faceHeightWorld = getDistanceWorld(landmarks[10], landmarks[152]);
-            
-            // --- Earrings ---
+            const dLeft = Math.abs(noseTip.x - landmarks[234].x);
+            const dRight = Math.abs(noseTip.x - landmarks[454].x);
+            const faceWidthRaw = dLeft + dRight;
+            const showLeftEar = (dLeft / faceWidthRaw) > 0.25;
+            const showRightEar = (dRight / faceWidthRaw) > 0.25;
+
+            // Earrings
             if (config.earring) {
                 const targetScale = eyeDistWorld * 5.0;
-                const gravityRot = 0; 
                 const leftLobe = landmarks[132]; 
                 const rightLobe = landmarks[361];
                 const centerFace = mapCoord(landmarks[168].x, landmarks[168].y); 
-                
                 const autoPush = eyeDistWorld * 0.04; 
-                const autoDrop = 0;
 
                 if (showLeftEar) {
                     leftEarringGroup.visible = true;
                     const posL = mapCoord(leftLobe.x, leftLobe.y);
                     const pushVecL = new THREE.Vector3().subVectors(posL, centerFace).setZ(0).normalize();
                     posL.add(pushVecL.multiplyScalar(autoPush));
-                    posL.y -= autoDrop;
                     posL.z = (-leftLobe.z * zScale); 
-                    smoothTransform(leftEarringGroup, posL, gravityRot, targetScale, SMOOTHING);
+                    smoothTransform(leftEarringGroup, posL, 0, targetScale, SMOOTHING);
                 } else leftEarringGroup.visible = false;
 
                 if (showRightEar) {
@@ -441,16 +372,14 @@
                     const posR = mapCoord(rightLobe.x, rightLobe.y);
                     const pushVecR = new THREE.Vector3().subVectors(posR, centerFace).setZ(0).normalize();
                     posR.add(pushVecR.multiplyScalar(autoPush));
-                    posR.y -= autoDrop;
                     posR.z = (-rightLobe.z * zScale);
-                    smoothTransform(rightEarringGroup, posR, gravityRot, targetScale, SMOOTHING);
+                    smoothTransform(rightEarringGroup, posR, 0, targetScale, SMOOTHING);
                 } else rightEarringGroup.visible = false;
             } else {
-                leftEarringGroup.visible = false;
-                rightEarringGroup.visible = false;
+                leftEarringGroup.visible = false; rightEarringGroup.visible = false;
             }
 
-            // --- Necklace ---
+            // Necklace
             if (config.necklace) {
                 necklaceGroup.visible = true;
                 const leftEarTragus = landmarks[234];
@@ -458,84 +387,86 @@
                 const midEarX = (leftEarTragus.x + rightEarTragus.x) / 2;
                 const midEarY = (leftEarTragus.y + rightEarTragus.y) / 2;
                 const pos = mapCoord(midEarX, midEarY);
-                
                 const neckDrop = faceHeightWorld * 0.7; 
                 pos.y -= neckDrop;
-                
                 const chin = landmarks[152];
                 pos.z = (-chin.z * zScale) - (faceHeightWorld * 0.2); 
-                
                 const targetScale = eyeDistWorld * 5.5;
-                
                 const leftEye = landmarks[33];
                 const rightEye = landmarks[263];
                 let headRoll = -Math.atan2(rightEye.y - leftEye.y, rightEye.x - leftEye.x); 
-                const shoulderStableRot = headRoll * 0.05;
-
-                smoothTransform(necklaceGroup, pos, shoulderStableRot, targetScale, SMOOTHING);
-            } else {
-                necklaceGroup.visible = false;
-            }
+                smoothTransform(necklaceGroup, pos, headRoll * 0.05, targetScale, SMOOTHING);
+            } else necklaceGroup.visible = false;
         }
 
         function onHandResults(results) {
             if (!results.multiHandLandmarks || results.multiHandLandmarks.length === 0) {
-                ringGroup.visible = false;
-                return;
+                ringGroup.visible = false; return;
             }
             const landmarks = results.multiHandLandmarks[0];
             if (config.ring) {
                 ringGroup.visible = true;
-                const mcp = landmarks[13]; 
-                const pip = landmarks[14]; 
-                const midX = (mcp.x + pip.x) / 2;
-                const midY = (mcp.y + pip.y) / 2;
+                const mcp = landmarks[13]; const pip = landmarks[14]; 
+                const midX = (mcp.x + pip.x) / 2; const midY = (mcp.y + pip.y) / 2;
                 const pos = mapCoord(midX, midY);
-
-                const posMCP = mapCoord(mcp.x, mcp.y);
-                const posPIP = mapCoord(pip.x, pip.y);
+                const posMCP = mapCoord(mcp.x, mcp.y); const posPIP = mapCoord(pip.x, pip.y);
                 const angle = Math.atan2(posPIP.y - posMCP.y, posPIP.x - posMCP.x);
                 const targetRotZ = angle - (Math.PI / 2);
-
                 const handLenWorld = getDistanceWorld(landmarks[0], landmarks[9]);
                 const targetScale = handLenWorld * 4.5;
-                
                 if (currentEyeDist > 0) {
                     const zScale = getZScale();
-                    const zShift = (handLenWorld - (currentEyeDist * 0.85)) * zScale * 6.0;
-                    pos.z = zShift;
+                    pos.z = (handLenWorld - (currentEyeDist * 0.85)) * zScale * 6.0;
                 } else pos.z = 0;
-
                 smoothTransform(ringGroup, pos, targetRotZ, targetScale, SMOOTHING);
             } else ringGroup.visible = false;
         }
 
-        // --- Camera & Resizing ---
+        // --- MANUAL CAMERA & INIT ---
+        let isCameraRunning = false;
+        window.startCameraManual = async function() {
+            statusText.innerText = "Initializing...";
+            const constraints = { video: { facingMode: 'user' } };
 
-        const isMobile = window.innerWidth < window.innerHeight;
-        const cameraConfig = {
-            onFrame: async () => {
+            try {
+                const stream = await navigator.mediaDevices.getUserMedia(constraints);
+                videoElement.srcObject = stream;
+                statusText.innerText = "Loading AI...";
+                
+                videoElement.oncanplay = () => {
+                    videoElement.play().then(() => {
+                        startBtn.style.display = 'none';
+                        loader.style.display = 'none';
+                        isCameraRunning = true;
+                        updateLayout();
+                        requestAnimationFrame(processFrame);
+                    }).catch(err => {
+                        console.error("Play blocked", err);
+                        statusText.innerText = "Tap to Start";
+                        startBtn.style.display = 'block';
+                    });
+                };
+            } catch (err) {
+                console.error("Camera Init Failed", err);
+                statusText.innerText = "Error";
+                errorMsg.innerText = err.message;
+                errorMsg.classList.remove('hidden');
+            }
+        };
+
+        async function processFrame() {
+            if (!isCameraRunning) return;
+            if (videoElement.readyState >= 2) {
                 await faceMesh.send({image: videoElement});
                 await hands.send({image: videoElement});
                 renderer.render(scene, camera);
-            },
-            // [FIX] Request 4:3 (e.g., 640x480 or 480x640) which is standard for webcams/phones
-            // This reduces the cropping significantly compared to requesting 16:9
-            width: { ideal: isMobile ? 480 : 1280 },
-            height: { ideal: isMobile ? 640 : 960 },
-            facingMode: 'user'
-        };
+            }
+            requestAnimationFrame(processFrame);
+        }
 
-        const cameraUtils = new Camera(videoElement, cameraConfig);
-        cameraUtils.start()
-            .then(() => loader.style.display = 'none')
-            .catch(err => {
-                console.error(err);
-                loader.innerHTML = `<p class="text-red-500">Camera initialization failed.</p>`;
-            });
+        startCameraManual();
 
-
-        // --- UI & Events ---
+        // UI & Events
         document.getElementById('toggle-earring').addEventListener('change', (e) => config.earring = e.target.checked);
         document.getElementById('toggle-necklace').addEventListener('change', (e) => config.necklace = e.target.checked);
         document.getElementById('toggle-ring').addEventListener('change', (e) => config.ring = e.target.checked);
@@ -543,8 +474,6 @@
         window.addEventListener('resize', updateLayout);
         window.addEventListener('orientationchange', () => setTimeout(updateLayout, 100));
         videoElement.addEventListener('loadedmetadata', updateLayout);
-        
-        // Periodic check to fix layout shifts
         setInterval(() => {
             if (videoElement.videoWidth > 0 && Math.abs(videoElement.clientWidth - canvasElement.clientWidth) > 2) {
                 updateLayout();
